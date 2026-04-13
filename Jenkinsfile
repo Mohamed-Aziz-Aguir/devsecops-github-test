@@ -3,7 +3,6 @@ pipeline {
 
     environment {
         APP_NAME = "secure-task-app"
-        VENV = "venv"
     }
 
     options {
@@ -12,18 +11,12 @@ pipeline {
 
     stages {
 
-        // =========================
-        // Checkout
-        // =========================
         stage('Checkout') {
             steps {
                 checkout scm
             }
         }
 
-        // =========================
-        // Setup Environment
-        // =========================
         stage('Setup Environment') {
             steps {
                 sh '''
@@ -35,9 +28,6 @@ pipeline {
             }
         }
 
-        // =========================
-        // Code Quality
-        // =========================
         stage('Flake8') {
             steps {
                 sh '''
@@ -56,9 +46,6 @@ pipeline {
             }
         }
 
-        // =========================
-        // Tests
-        // =========================
         stage('Tests') {
             steps {
                 sh '''
@@ -68,9 +55,6 @@ pipeline {
             }
         }
 
-        // =========================
-        // Security
-        // =========================
         stage('Bandit') {
             steps {
                 sh '''
@@ -89,13 +73,10 @@ pipeline {
             }
         }
 
-        // =========================
-        // Docker
-        // =========================
         stage('Docker Build') {
             steps {
                 sh '''
-                    docker build -t $APP_NAME -f docker/Dockerfile .
+                    docker build -t ${APP_NAME} -f docker/Dockerfile .
                 '''
             }
         }
@@ -103,19 +84,18 @@ pipeline {
         stage('Run Container') {
             steps {
                 sh '''
-                    docker rm -f $APP_NAME || true
-                    docker run -d -p 5000:5000 --name $APP_NAME $APP_NAME
+                    docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
+                    docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}
                 '''
             }
         }
     }
 
-    // =========================
-    // Cleanup
-    // =========================
     post {
         always {
-            sh "docker rm -f ${APP_NAME} || true"
+            sh '''
+                docker ps -q -f name=secure-task-app | grep -q . && docker rm -f secure-task-app || true
+            '''
             cleanWs()
         }
     }
