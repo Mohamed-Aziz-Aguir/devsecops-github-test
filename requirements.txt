@@ -1,0 +1,22 @@
+# Core Framework
+Flask==3.0.0
+Werkzeug==3.0.1
+
+# Production Server
+gunicorn==21.2.0
+
+# Security & Validation
+python-dotenv==1.0.0
+
+# Development & Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+flake8==6.1.0
+pylint==3.0.3
+bandit==1.7.5
+
+# Security Scanning
+pip-audit==2.6.1
+
+# HTTP Testing
+requests==2.31.0
