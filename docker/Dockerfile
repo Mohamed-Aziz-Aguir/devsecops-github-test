@@ -1,27 +1,25 @@
-FROM python:3.11-slim AS builder
-
-WORKDIR /app
-COPY requirements.txt .
-
-# Install dependencies to a temporary location
-RUN pip install --user --no-cache-dir -r requirements.txt
-
 FROM python:3.11-slim
+
 WORKDIR /app
 
-# Create non-root user with proper home directory
+# Install dependencies as root first
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Create non-root user
 RUN groupadd --system appgroup && \
-    useradd --system --create-home --home-dir /home/appuser --shell /bin/bash \
-    --no-log-init --gid appgroup appuser
+    useradd --system --create-home --home-dir /home/appuser \
+    --shell /bin/bash --gid appgroup appuser
 
-# Copy installed packages from builder and fix permissions
-COPY --from=builder --chown=appuser:appgroup /root/.local /home/appuser/.local
+# Copy application files
+COPY app/ app/
+COPY tests/ tests/
 
-# Copy application files with proper ownership
-COPY --chown=appuser:appgroup app/ app/
-COPY --chown=appuser:appgroup tests/ tests/
+# Fix permissions for the entire app directory
+RUN chown -R appuser:appgroup /app && \
+    chmod -R 755 /app
 
-# Add local Python binaries to PATH
+# Set environment variables
 ENV PATH=/home/appuser/.local/bin:$PATH
 ENV PYTHONPATH=/app
 ENV HOST=0.0.0.0
@@ -35,7 +33,7 @@ USER appuser
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" || exit 1
 
-# Run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "app.app:app"]	
+# Run the application using python directly instead of gunicorn
+CMD ["python", "-m", "app.app"]
