@@ -1,168 +1,171 @@
 pipeline {
+
     agent any
 
     environment {
         APP_NAME = "secure-task-app"
-        IMAGE_TAG = "${BUILD_NUMBER}"
-        IMAGE_LATEST = "latest"
-
-        SONAR_HOST_URL = "http://localhost:9000"
-        SONAR_PROJECT_KEY = "secure-task-manager"
-
-        VENV = "venv"
-
-        TRIVY_SEVERITY = "HIGH,CRITICAL"
+        IMAGE_NAME = "${APP_NAME}:${BUILD_NUMBER}"
+        IMAGE_LATEST = "${APP_NAME}:latest"
     }
 
     options {
         timestamps()
-        disableConcurrentBuilds()
-        buildDiscarder(logRotator(numToKeepStr: '10'))
         timeout(time: 1, unit: 'HOURS')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
     stages {
 
-        stage('📥 Checkout') {
+        stage('Checkout') {
             steps {
                 checkout scm
-                sh "git log -1 --oneline"
+                sh 'git log -1 --oneline'
             }
         }
 
-        stage('🐍 Setup Python Environment') {
+        stage('Setup Python') {
             steps {
-                sh """
-                    python3 -m venv ${VENV}
-                    . ${VENV}/bin/activate
-                    pip install --upgrade pip
-                    pip install -r requirements.txt
+                sh '''
+                python3 -m venv venv
+                . venv/bin/activate
 
-                    pip install flake8 pylint bandit pip-audit
-                """
+                pip install --upgrade pip
+                pip install -r requirements.txt
+                pip install -r requirements-dev.txt
+                '''
             }
         }
 
-        stage('🎨 Code Quality - Flake8') {
+        stage('Code Quality - Flake8') {
             steps {
-                sh """
-                    . ${VENV}/bin/activate
-                    flake8 . --max-line-length=120 --exit-zero
-                """
+                sh '''
+                . venv/bin/activate
+                flake8 app --max-line-length=120 || true
+                '''
             }
         }
 
-        stage('🎨 Code Quality - Pylint') {
+        stage('Code Quality - Pylint') {
             steps {
-                sh """
-                    . ${VENV}/bin/activate
-                    pylint app.py --exit-zero
-                """
+                sh '''
+                . venv/bin/activate
+                pylint app/app.py --exit-zero
+                '''
             }
         }
 
-        stage('🔐 SAST - Bandit') {
+        stage('Unit Tests') {
             steps {
-                sh """
-                    . ${VENV}/bin/activate
-                    bandit -r . -f txt --exit-zero
-                """
+                sh '''
+                . venv/bin/activate
+                pytest tests --maxfail=1 --disable-warnings -q
+                '''
             }
         }
 
-        stage('📦 Dependency Scan - pip-audit') {
+        stage('SAST - Bandit') {
             steps {
-                sh """
-                    . ${VENV}/bin/activate
-                    pip-audit || true
-                """
+                sh '''
+                . venv/bin/activate
+                bandit -r app -f txt --exit-zero
+                '''
             }
         }
 
-        stage('📊 SonarQube Analysis') {
+        stage('Dependency Scan - pip-audit') {
+            steps {
+                sh '''
+                . venv/bin/activate
+                pip-audit || true
+                '''
+            }
+        }
+
+        stage('SonarQube Scan') {
             steps {
                 withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-                    sh """
-                        sonar-scanner \
-                        -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                        -Dsonar.sources=. \
-                        -Dsonar.host.url=${SONAR_HOST_URL} \
-                        -Dsonar.login=$SONAR_TOKEN
-                    """
+                    sh '''
+                    sonar-scanner \
+                      -Dsonar.projectKey=secure-task-manager \
+                      -Dsonar.sources=app \
+                      -Dsonar.host.url=http://localhost:9000 \
+                      -Dsonar.login=$SONAR_TOKEN
+                    '''
                 }
             }
         }
 
-        stage('🔎 Trivy FS Scan') {
+        stage('Trivy Filesystem Scan') {
             steps {
-                sh """
-                    trivy fs . --severity ${TRIVY_SEVERITY} || true
-                """
+                sh '''
+                trivy fs . --severity HIGH,CRITICAL --exit-code 0
+                '''
             }
         }
 
-        stage('🐳 Docker Build') {
+        stage('Docker Build') {
             steps {
-                sh """
-                    docker build \
-                        -t ${APP_NAME}:${IMAGE_TAG} \
-                        -t ${APP_NAME}:${IMAGE_LATEST} .
-                """
+                sh '''
+                docker build -t $IMAGE_NAME -t $IMAGE_LATEST -f docker/Dockerfile .
+                '''
             }
         }
 
-        stage('🛡️ Trivy Image Scan') {
+        stage('Trivy Image Scan') {
             steps {
-                sh """
-                    trivy image ${APP_NAME}:${IMAGE_LATEST} || true
-                """
+                sh '''
+                trivy image $IMAGE_LATEST --severity HIGH,CRITICAL --exit-code 0
+                '''
             }
         }
 
-        stage('🚀 Run Application') {
+        stage('Run Application') {
             steps {
-                sh """
-                    docker rm -f ${APP_NAME} || true
+                sh '''
+                docker rm -f $APP_NAME || true
 
-                    docker run -d \
-                        --name ${APP_NAME} \
-                        -p 5000:5000 \
-                        ${APP_NAME}:${IMAGE_LATEST}
+                docker run -d \
+                    --name $APP_NAME \
+                    -p 5000:5000 \
+                    $IMAGE_LATEST
 
-                    sleep 5
-                    curl -f http://localhost:5000 || true
-                """
+                sleep 10
+
+                curl http://localhost:5000/health
+                '''
             }
         }
 
-        stage('🕷️ OWASP ZAP (DAST)') {
+        stage('DAST - OWASP ZAP') {
             steps {
-                sh """
-                    docker run --rm \
-                        --network=host \
-                        -v \$(pwd):/zap/wrk/:rw \
-                        ghcr.io/zaproxy/zaproxy:stable \
-                        zap-baseline.py \
-                        -t http://localhost:5000 \
-                        -r zap-report.html || true
-                """
+                sh '''
+                docker run --rm \
+                    --network=host \
+                    ghcr.io/zaproxy/zaproxy:stable \
+                    zap-baseline.py \
+                    -t http://localhost:5000 \
+                    -I
+                '''
             }
         }
+
     }
 
     post {
 
         always {
-            sh "docker rm -f ${APP_NAME} || true"
+            sh '''
+            docker rm -f $APP_NAME || true
+            '''
             cleanWs()
         }
 
         success {
-            echo "✅ PIPELINE SUCCESS - BUILD ${BUILD_NUMBER}"
+            echo "PIPELINE SUCCESS"
         }
 
         failure {
-            echo "❌ PIPELINE FAILED - CHECK LOGS"
+            echo "PIPELINE FAILED"
         }
     }
 }
