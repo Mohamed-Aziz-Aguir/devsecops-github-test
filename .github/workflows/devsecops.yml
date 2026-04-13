@@ -1,0 +1,49 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # -------------------------
+      # GITLEAKS (SECRET SCAN)
+      # -------------------------
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+
+      # -------------------------
+      # JAVA (required for SonarScanner)
+      # -------------------------
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # -------------------------
+      # SONARQUBE SCAN
+      # -------------------------
+      - name: SonarQube Scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          curl -L -o sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+          unzip sonar-scanner.zip
+          mv sonar-scanner-* sonar-scanner
+
+          export PATH=$PATH:$(pwd)/sonar-scanner/bin
+
+          sonar-scanner \
+            -Dsonar.projectKey=github-project \
+            -Dsonar.sources=. \
+            -Dsonar.host.url=$SONAR_HOST_URL \
+            -Dsonar.login=$SONAR_TOKEN
+
