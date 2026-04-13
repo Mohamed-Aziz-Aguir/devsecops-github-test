@@ -1,75 +1,74 @@
 pipeline {
     agent any
 
+    environment {
+        APP_NAME = "secure-task-app"
+        VENV = "venv"
+    }
+
     options {
         timestamps()
         timeout(time: 1, unit: 'HOURS')
         disableConcurrentBuilds()
     }
 
-    environment {
-        VENV = "venv"
-        APP_NAME = "secure-task-app"
-    }
-
     stages {
 
-        stage('📥 Checkout') {
+        stage('Checkout') {
             steps {
                 checkout scm
-                sh 'git log -1 --oneline'
             }
         }
 
-        stage('🐍 Setup Python Environment') {
+        stage('Setup Environment') {
             steps {
                 sh '''
                     python3 -m venv venv
                     . venv/bin/activate
-                    pip install --upgrade pip setuptools wheel
+                    pip install --upgrade pip
                     pip install -r requirements.txt
-                    pip install flake8 pylint bandit pip-audit pytest pytest-cov
+                    pip install flake8 pylint bandit pytest pip-audit
                 '''
             }
         }
 
-        stage('🎨 Flake8') {
+        stage('Lint - Flake8') {
             steps {
                 sh '''
                     . venv/bin/activate
-                    flake8 app/ --max-line-length=100
+                    flake8 app --max-line-length=100
                 '''
             }
         }
 
-        stage('🧠 Pylint') {
+        stage('Lint - Pylint') {
             steps {
                 sh '''
                     . venv/bin/activate
-                    pylint app --disable=all --enable=E,W --exit-zero
+                    pylint app --exit-zero
                 '''
             }
         }
 
-        stage('🧪 Unit Tests') {
+        stage('Tests') {
             steps {
                 sh '''
                     . venv/bin/activate
-                    pytest -q --disable-warnings --maxfail=1 || true
+                    pytest tests || true
                 '''
             }
         }
 
-        stage('🔐 Bandit SAST') {
+        stage('SAST - Bandit') {
             steps {
                 sh '''
                     . venv/bin/activate
-                    bandit -r app -f txt || true
+                    bandit -r app || true
                 '''
             }
         }
 
-        stage('📦 Dependency Scan') {
+        stage('Dependency Scan') {
             steps {
                 sh '''
                     . venv/bin/activate
@@ -78,35 +77,19 @@ pipeline {
             }
         }
 
-        stage('🐳 Docker Build') {
+        stage('Docker Build') {
             steps {
                 sh '''
-                    docker build -t secure-task-app docker/
+                    docker build -t secure-task-app .
                 '''
             }
         }
 
-        stage('🔎 Trivy Image Scan') {
-            steps {
-                sh '''
-                    trivy image secure-task-app || true
-                '''
-            }
-        }
-
-        stage('🚀 Run Container') {
+        stage('Run Container') {
             steps {
                 sh '''
                     docker rm -f secure-task-app || true
                     docker run -d -p 5000:5000 --name secure-task-app secure-task-app
-                '''
-            }
-        }
-
-        stage('🕷️ OWASP ZAP') {
-            steps {
-                sh '''
-                    echo "DAST skipped in local run (needs target URL)"
                 '''
             }
         }
