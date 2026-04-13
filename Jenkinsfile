@@ -9,11 +9,11 @@ pipeline {
         DOCKER_IMAGE = "${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${APP_NAME}"
         PYTHONPATH = "${env.WORKSPACE}"
         
-        // SonarQube configuration - Using your credential
+        // SonarQube configuration
         SONAR_HOST_URL = "http://localhost:9000"  // Update with your SonarQube URL
         SONAR_TOKEN = credentials('sonar-token')
         
-        // Docker credentials - Using your exact credential name "Docker-Hub"
+        // Docker credentials
         DOCKER_CREDS = credentials('Docker-Hub')
     }
 
@@ -135,32 +135,25 @@ pipeline {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
                 script {
+                    // Using existing sonar-scanner installation
                     sh '''
-                        if ! command -v sonar-scanner &> /dev/null; then
-                            echo "Installing sonar-scanner..."
-                            wget -q https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
-                            unzip -q sonar-scanner-cli-5.0.1.3006-linux.zip
-                            export PATH=$PATH:$(pwd)/sonar-scanner-5.0.1.3006-linux/bin
-                        fi
+                        echo "Running SonarQube analysis..."
+                        sonar-scanner \
+                            -Dsonar.projectKey=${APP_NAME} \
+                            -Dsonar.projectName="${APP_NAME}" \
+                            -Dsonar.projectVersion=${APP_VERSION} \
+                            -Dsonar.sources=app \
+                            -Dsonar.tests=tests \
+                            -Dsonar.python.coverage.reportPaths=coverage.xml \
+                            -Dsonar.python.pylint.reportPath=pylint-report.txt \
+                            -Dsonar.python.bandit.reportPath=bandit-report.json \
+                            -Dsonar.exclusions=**/venv/**,**/tests/** \
+                            -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
+                            -Dsonar.host.url=${SONAR_HOST_URL} \
+                            -Dsonar.login=${SONAR_TOKEN}
+                        
+                        echo "SonarQube analysis completed!"
                     '''
-                    
-                    withSonarQubeEnv('SonarQube') {
-                        sh '''
-                            sonar-scanner \
-                                -Dsonar.projectKey=${APP_NAME} \
-                                -Dsonar.projectName="${APP_NAME}" \
-                                -Dsonar.projectVersion=${APP_VERSION} \
-                                -Dsonar.sources=app \
-                                -Dsonar.tests=tests \
-                                -Dsonar.python.coverage.reportPaths=coverage.xml \
-                                -Dsonar.python.pylint.reportPath=pylint-report.txt \
-                                -Dsonar.python.bandit.reportPath=bandit-report.json \
-                                -Dsonar.exclusions=**/venv/**,**/tests/** \
-                                -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
-                                -Dsonar.host.url=${SONAR_HOST_URL} \
-                                -Dsonar.login=${SONAR_TOKEN}
-                        '''
-                    }
                 }
             }
         }
@@ -253,7 +246,6 @@ pipeline {
             }
             steps {
                 script {
-                    // Using the credentials directly
                     sh '''
                         echo "Logging into Docker Hub..."
                         echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
@@ -294,6 +286,7 @@ pipeline {
             echo "Build: ${APP_NAME}:${APP_VERSION}"
             echo "Git Commit: ${env.GIT_COMMIT_SHORT}"
             echo "Docker Image: ${DOCKER_IMAGE}:${APP_VERSION}"
+            echo "SonarQube Dashboard: ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
             echo "========================================="
         }
         failure {
