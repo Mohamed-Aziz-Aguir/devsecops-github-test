@@ -1,0 +1,12 @@
+-r requirements.txt
+pytest==8.3.5
+pytest-cov==6.0.0
+pytest-html==4.1.1
+flake8==7.1.2
+pylint==3.3.5
+bandit==1.8.3
+pbr==6.1.1
+pip-audit==2.9.0
+safety==3.2.11
+setuptools>=82.0.1
+wheel>=0.46.2
