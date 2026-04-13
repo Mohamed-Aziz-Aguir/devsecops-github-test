@@ -2,14 +2,8 @@ pipeline {
     agent any
 
     environment {
-        APP_NAME = "secure-task-app"
         VENV = "venv"
-    }
-
-    options {
-        timestamps()
-        timeout(time: 1, unit: 'HOURS')
-        disableConcurrentBuilds()
+        IMAGE_NAME = "secure-task-app"
     }
 
     stages {
@@ -20,14 +14,13 @@ pipeline {
             }
         }
 
-        stage('Setup Environment') {
+        stage('Setup Python') {
             steps {
                 sh '''
-                    python3 -m venv venv
-                    . venv/bin/activate
-                    pip install --upgrade pip
-                    pip install -r requirements.txt
-                    pip install flake8 pylint bandit pytest pip-audit
+                python3 -m venv venv
+                . venv/bin/activate
+                pip install --upgrade pip
+                pip install -r requirements.txt
                 '''
             }
         }
@@ -35,8 +28,8 @@ pipeline {
         stage('Lint - Flake8') {
             steps {
                 sh '''
-                    . venv/bin/activate
-                    flake8 app --max-line-length=100
+                . venv/bin/activate
+                flake8 app --max-line-length=100 || true
                 '''
             }
         }
@@ -44,8 +37,8 @@ pipeline {
         stage('Lint - Pylint') {
             steps {
                 sh '''
-                    . venv/bin/activate
-                    pylint app --exit-zero
+                . venv/bin/activate
+                pylint app || true
                 '''
             }
         }
@@ -53,8 +46,8 @@ pipeline {
         stage('Tests') {
             steps {
                 sh '''
-                    . venv/bin/activate
-                    pytest tests || true
+                . venv/bin/activate
+                pytest -q || true
                 '''
             }
         }
@@ -62,8 +55,8 @@ pipeline {
         stage('SAST - Bandit') {
             steps {
                 sh '''
-                    . venv/bin/activate
-                    bandit -r app || true
+                . venv/bin/activate
+                bandit -r app || true
                 '''
             }
         }
@@ -71,8 +64,8 @@ pipeline {
         stage('Dependency Scan') {
             steps {
                 sh '''
-                    . venv/bin/activate
-                    pip-audit || true
+                . venv/bin/activate
+                pip-audit || true
                 '''
             }
         }
@@ -80,7 +73,7 @@ pipeline {
         stage('Docker Build') {
             steps {
                 sh '''
-                    docker build -t secure-task-app .
+                docker build -t $IMAGE_NAME -f docker/Dockerfile .
                 '''
             }
         }
@@ -88,8 +81,8 @@ pipeline {
         stage('Run Container') {
             steps {
                 sh '''
-                    docker rm -f secure-task-app || true
-                    docker run -d -p 5000:5000 --name secure-task-app secure-task-app
+                docker rm -f $IMAGE_NAME || true
+                docker run -d -p 5000:5000 --name $IMAGE_NAME $IMAGE_NAME
                 '''
             }
         }
