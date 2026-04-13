@@ -29,7 +29,7 @@ WORKDIR /app
 COPY --from=builder /root/.local /home/appuser/.local
 
 # Copy application code
-COPY --chown=appuser:appuser app.py .
+COPY --chown=appuser:appuser COPY ../app/app.py .
 
 # Update PATH for user-installed packages
 ENV PATH=/home/appuser/.local/bin:$PATH
