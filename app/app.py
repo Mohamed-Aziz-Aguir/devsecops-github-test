@@ -1,11 +1,16 @@
-from flask import Flask, jsonify
+"""
+Flask application for DevSecOps testing.
+Provides REST API endpoints for health checks and secure operations.
+"""
 import os
+from flask import Flask, jsonify
 
 app = Flask(__name__)
 
 
 @app.route('/')
 def home():
+    """Return the service status."""
     return jsonify({
         "status": "running",
         "service": "devsecops-app"
@@ -14,11 +19,13 @@ def home():
 
 @app.route('/health')
 def health():
+    """Return the health status of the service."""
     return jsonify({"status": "healthy"})
 
 
 @app.route('/secure')
 def secure():
+    """Return security status message."""
     return jsonify({
         "security": "enabled",
         "message": "secure endpoint"
