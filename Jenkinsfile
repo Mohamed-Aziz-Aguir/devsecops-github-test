@@ -1,9 +1,4 @@
 
----
-
-# ✅ Correct Jenkinsfile (Copy Exactly)
-
-Replace your Jenkinsfile with this **clean version**.
 
 ```groovy
 pipeline {
