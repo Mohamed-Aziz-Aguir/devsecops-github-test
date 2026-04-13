@@ -2,95 +2,124 @@ pipeline {
     agent any
 
     environment {
+        APP_NAME = "secure-task-app"
         VENV = "venv"
-        IMAGE_NAME = "secure-task-app"
+    }
+
+    options {
+        timestamps()
+        ansiColor('xterm')
     }
 
     stages {
 
+        // =========================
+        // Checkout Source Code
+        // =========================
         stage('Checkout') {
             steps {
                 checkout scm
             }
         }
 
-        stage('Setup Python') {
+        // =========================
+        // Python Setup
+        // =========================
+        stage('Setup Environment') {
             steps {
                 sh '''
-                python3 -m venv venv
-                . venv/bin/activate
-                pip install --upgrade pip
-                pip install -r requirements.txt
+                    python3 -m venv venv
+                    . venv/bin/activate
+                    pip install --upgrade pip
+                    pip install -r requirements.txt
                 '''
             }
         }
 
-        stage('Lint - Flake8') {
+        // =========================
+        // Code Quality
+        // =========================
+        stage('Code Quality - Flake8') {
             steps {
                 sh '''
-                . venv/bin/activate
-                flake8 app --max-line-length=100 || true
+                    . venv/bin/activate
+                    flake8 app --max-line-length=100 || true
                 '''
             }
         }
 
-        stage('Lint - Pylint') {
+        stage('Code Quality - Pylint') {
             steps {
                 sh '''
-                . venv/bin/activate
-                pylint app || true
+                    . venv/bin/activate
+                    pylint app || true
                 '''
             }
         }
 
-        stage('Tests') {
+        // =========================
+        // Tests
+        // =========================
+        stage('Unit Tests') {
             steps {
                 sh '''
-                . venv/bin/activate
-                pytest -q || true
+                    . venv/bin/activate
+                    pytest -q || true
                 '''
             }
         }
 
+        // =========================
+        // Security Scans
+        // =========================
         stage('SAST - Bandit') {
             steps {
                 sh '''
-                . venv/bin/activate
-                bandit -r app || true
+                    . venv/bin/activate
+                    bandit -r app || true
                 '''
             }
         }
 
-        stage('Dependency Scan') {
+        stage('Dependency Scan - pip-audit') {
             steps {
                 sh '''
-                . venv/bin/activate
-                pip-audit || true
+                    . venv/bin/activate
+                    pip-audit || true
                 '''
             }
         }
 
+        // =========================
+        // Docker Build
+        // =========================
         stage('Docker Build') {
             steps {
                 sh '''
-                docker build -t $IMAGE_NAME -f docker/Dockerfile .
+                    docker build -t $APP_NAME -f docker/Dockerfile .
                 '''
             }
         }
 
+        // =========================
+        // Run Application
+        // =========================
         stage('Run Container') {
             steps {
                 sh '''
-                docker rm -f $IMAGE_NAME || true
-                docker run -d -p 5000:5000 --name $IMAGE_NAME $IMAGE_NAME
+                    docker rm -f $APP_NAME || true
+                    docker run -d -p 5000:5000 --name $APP_NAME $APP_NAME
                 '''
             }
         }
     }
 
+    // =========================
+    // Cleanup
+    // =========================
     post {
         always {
-            sh 'docker rm -f secure-task-app || true'
+            sh "docker rm -f ${APP_NAME} || true"
             cleanWs()
         }
     }
