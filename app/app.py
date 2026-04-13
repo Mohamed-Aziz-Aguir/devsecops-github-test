@@ -7,6 +7,7 @@ import time
 import logging
 from flask import Flask, jsonify, request, g
 
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -15,6 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
 
 # Security headers middleware
 @app.after_request
@@ -25,19 +27,22 @@ def add_security_headers(response):
     response.headers['X-XSS-Protection'] = '1; mode=block'
     return response
 
+
 # Request timing middleware
 @app.before_request
 def before_request():
     """Start timer for request."""
     g.start_time = time.time()
 
+
 @app.after_request
 def after_request(response):
     """Log request duration."""
     if hasattr(g, 'start_time'):
         duration = time.time() - g.start_time
-        logger.info(f"{request.method} {request.path} - {response.status_code} - {duration:.3f}s")
+        logger.info("%s %s - %s - %.3fs", request.method, request.path, response.status_code, duration)
     return response
+
 
 # Routes
 @app.route('/')
@@ -48,10 +53,12 @@ def home():
         "service": "devsecops-app"
     })
 
+
 @app.route('/health')
 def health():
     """Return health status."""
     return jsonify({"status": "healthy"})
+
 
 @app.route('/secure')
 def secure():
@@ -61,6 +68,7 @@ def secure():
         "message": "secure endpoint"
     })
 
+
 @app.route('/metrics')
 def metrics():
     """Return basic metrics."""
@@ -69,20 +77,24 @@ def metrics():
         "status": "operational"
     })
 
+
 # Error handlers
 @app.errorhandler(404)
-def not_found(error):
+def not_found(error):  # pylint: disable=unused-argument
     """Handle 404 errors."""
     return jsonify({"error": "Not Found", "status": 404}), 404
+
 
 @app.errorhandler(500)
 def internal_error(error):
     """Handle 500 errors."""
-    logger.error(f"Internal server error: {error}")
+    logger.error("Internal server error: %s", error)
     return jsonify({"error": "Internal Server Error", "status": 500}), 500
+
 
 # Initialize start time
 app.config['START_TIME'] = time.time()
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

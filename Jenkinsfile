@@ -34,12 +34,18 @@ pipeline {
             parallel {
                 stage('Flake8') {
                     steps {
-                        sh '. venv/bin/activate && flake8 app/ --max-line-length=100 --statistics || true'
+                        sh '''
+                            . venv/bin/activate
+                            flake8 app/ --max-line-length=100 --statistics || true
+                        '''
                     }
                 }
                 stage('Pylint') {
                     steps {
-                        sh '. venv/bin/activate && pylint app/ --fail-under=6.0 --exit-zero'
+                        sh '''
+                            . venv/bin/activate
+                            pylint app/ --fail-under=6.0 --exit-zero || true
+                        '''
                     }
                 }
             }
@@ -89,10 +95,22 @@ pipeline {
             stages {
                 stage('Build') {
                     steps {
-                        sh '''
-                            docker build -t ${APP_NAME}:latest -f docker/Dockerfile .
-                            docker tag ${APP_NAME}:latest ${APP_NAME}:${BUILD_NUMBER}
-                        '''
+                        script {
+                            try {
+                                sh '''
+                                    # Pre-pull base image to avoid timeout
+                                    docker pull python:3.11-slim || true
+                                    docker build -t ${APP_NAME}:latest -f docker/Dockerfile .
+                                    docker tag ${APP_NAME}:latest ${APP_NAME}:${BUILD_NUMBER}
+                                '''
+                            } catch (Exception e) {
+                                echo "Docker build failed: ${e.getMessage()}"
+                                echo "Attempting to build with cached base image..."
+                                sh '''
+                                    docker build --no-cache -t ${APP_NAME}:latest -f docker/Dockerfile .
+                                '''
+                            }
+                        }
                     }
                 }
                 stage('Test') {
