@@ -4,7 +4,8 @@ WORKDIR /app
 
 # Install production dependencies only
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install gunicorn
 
 # Copy application
 COPY app/ app/
@@ -18,11 +19,13 @@ USER appuser
 # Environment variables
 ENV PYTHONPATH=/app \
     HOST=0.0.0.0 \
-    PORT=5000
+    PORT=5000 \
+    WORKERS=4
 
 EXPOSE 5000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" || exit 1
 
-CMD ["python", "-m", "app.app"]
+# Use gunicorn for production
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--worker-class", "sync", "app.app:app"]
