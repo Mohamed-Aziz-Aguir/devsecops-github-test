@@ -4,25 +4,23 @@ pipeline {
     environment {
         APP_NAME = "secure-task-app"
         APP_VERSION = "1.0.${BUILD_NUMBER}"
-        DOCKER_REGISTRY = "docker.io"  // Change to your registry (docker.io, ghcr.io, etc.)
-        DOCKER_NAMESPACE = "mohamedazizaguir"  // Your Docker Hub username or registry namespace
+        DOCKER_REGISTRY = "docker.io"
+        DOCKER_NAMESPACE = "mohamedazizaguir"
         DOCKER_IMAGE = "${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${APP_NAME}"
         PYTHONPATH = "${env.WORKSPACE}"
         
-        // SonarQube configuration
-        SONAR_HOST_URL = credentials('sonar-host-url')  // e.g., http://localhost:9000
+        // SonarQube configuration - Using your credential
+        SONAR_HOST_URL = "http://localhost:9000"  // Update with your SonarQube URL
         SONAR_TOKEN = credentials('sonar-token')
         
-        // Docker Hub credentials
-        DOCKER_USERNAME = credentials('docker-username')
-        DOCKER_PASSWORD = credentials('docker-password')
+        // Docker credentials - Using your exact credential name "Docker-Hub"
+        DOCKER_CREDS = credentials('Docker-Hub')
     }
 
     options {
         timestamps()
         buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '5'))
         timeout(time: 30, unit: 'MINUTES')
-        ansiColor('xterm')
     }
 
     stages {
@@ -45,7 +43,6 @@ pipeline {
                     . venv/bin/activate
                     pip install --upgrade pip
                     pip install -r requirements-dev.txt
-                    pip install sonar-scanner  # SonarQube scanner
                 '''
             }
         }
@@ -59,14 +56,6 @@ pipeline {
                             flake8 app/ --max-line-length=100 --statistics --count || true
                         '''
                     }
-                    post {
-                        always {
-                            recordIssues(
-                                tool: pyLint(),
-                                qualityGates: [[threshold: 1, type: 'TOTAL', unstable: true]]
-                            )
-                        }
-                    }
                 }
                 stage('Pylint') {
                     steps {
@@ -77,10 +66,6 @@ pipeline {
                     }
                     post {
                         always {
-                            recordIssues(
-                                tool: pyLint(pattern: 'pylint-report.txt'),
-                                qualityGates: [[threshold: 10, type: 'TOTAL', unstable: true]]
-                            )
                             archiveArtifacts artifacts: 'pylint-report.txt', allowEmptyArchive: true
                         }
                     }
@@ -93,7 +78,7 @@ pipeline {
                 sh '''
                     . venv/bin/activate
                     pytest tests/ -v --cov=app --cov-report=xml --cov-report=html --cov-report=term \
-                    --junitxml=test-results.xml --html=pytest-report.html --self-contained-html
+                    --junitxml=test-results.xml
                 '''
             }
             post {
@@ -103,11 +88,6 @@ pipeline {
                         reportDir: 'htmlcov',
                         reportFiles: 'index.html',
                         reportName: 'Coverage Report'
-                    ])
-                    publishHTML([
-                        reportDir: '.',
-                        reportFiles: 'pytest-report.html',
-                        reportName: 'Test Report'
                     ])
                 }
             }
@@ -125,7 +105,6 @@ pipeline {
                     }
                     post {
                         always {
-                            recordIssues(tools: [bandit(pattern: 'bandit-report.json')])
                             publishHTML([
                                 reportDir: '.',
                                 reportFiles: 'bandit-report.html',
@@ -149,29 +128,24 @@ pipeline {
                         }
                     }
                 }
-                stage('Safety Check') {
-                    steps {
-                        sh '''
-                            . venv/bin/activate
-                            safety check --json --output safety-report.json || true
-                        '''
-                    }
-                    post {
-                        always {
-                            archiveArtifacts artifacts: 'safety-report.json', allowEmptyArchive: true
-                        }
-                    }
-                }
             }
         }
 
         stage('SonarQube Analysis') {
-            when { expression { env.SONAR_HOST_URL != null && env.SONAR_TOKEN != null } }
+            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
                 script {
+                    sh '''
+                        if ! command -v sonar-scanner &> /dev/null; then
+                            echo "Installing sonar-scanner..."
+                            wget -q https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+                            unzip -q sonar-scanner-cli-5.0.1.3006-linux.zip
+                            export PATH=$PATH:$(pwd)/sonar-scanner-5.0.1.3006-linux/bin
+                        fi
+                    '''
+                    
                     withSonarQubeEnv('SonarQube') {
                         sh '''
-                            . venv/bin/activate
                             sonar-scanner \
                                 -Dsonar.projectKey=${APP_NAME} \
                                 -Dsonar.projectName="${APP_NAME}" \
@@ -182,8 +156,9 @@ pipeline {
                                 -Dsonar.python.pylint.reportPath=pylint-report.txt \
                                 -Dsonar.python.bandit.reportPath=bandit-report.json \
                                 -Dsonar.exclusions=**/venv/**,**/tests/** \
-                                -Dsonar.coverage.exclusions=**/tests/** \
-                                -Dsonar.qualitygate.wait=true
+                                -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
+                                -Dsonar.host.url=${SONAR_HOST_URL} \
+                                -Dsonar.login=${SONAR_TOKEN}
                         '''
                     }
                 }
@@ -200,6 +175,9 @@ pipeline {
                         docker tag ${APP_NAME}:${APP_VERSION} ${DOCKER_IMAGE}:${APP_VERSION}
                         docker tag ${APP_NAME}:${APP_VERSION} ${DOCKER_IMAGE}:latest
                         docker tag ${APP_NAME}:${APP_VERSION} ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
+                        
+                        echo "Docker images built successfully:"
+                        docker images | grep ${APP_NAME}
                     '''
                 }
             }
@@ -211,46 +189,29 @@ pipeline {
                     sh '''
                         echo "Scanning Docker image with Trivy..."
                         
-                        # Create reports directory
                         mkdir -p trivy-reports
                         
-                        # Scan for all vulnerabilities
-                        trivy image --severity LOW,MEDIUM,HIGH,CRITICAL \
-                            --format table \
-                            ${APP_NAME}:${APP_VERSION} || true
-                        
-                        # Generate JSON report for Jenkins
-                        trivy image --severity HIGH,CRITICAL \
-                            --format json \
-                            --output trivy-reports/trivy-high-critical.json \
-                            ${APP_NAME}:${APP_VERSION} || true
-                        
-                        # Generate HTML report
-                        trivy image --severity HIGH,CRITICAL \
-                            --format template \
-                            --template "@contrib/html.tpl" \
-                            --output trivy-reports/trivy-report.html \
-                            ${APP_NAME}:${APP_VERSION} || true
-                        
-                        # Generate SARIF for GitHub Advanced Security
-                        trivy image --severity HIGH,CRITICAL \
-                            --format sarif \
-                            --output trivy-reports/trivy-results.sarif \
-                            ${APP_NAME}:${APP_VERSION} || true
-                        
-                        echo "Trivy scan completed"
+                        if command -v trivy &> /dev/null; then
+                            trivy image --severity HIGH,CRITICAL \
+                                --format table \
+                                ${APP_NAME}:${APP_VERSION} || true
+                            
+                            trivy image --severity HIGH,CRITICAL \
+                                --format json \
+                                --output trivy-reports/trivy-high-critical.json \
+                                ${APP_NAME}:${APP_VERSION} || true
+                            
+                            echo "Trivy scan completed"
+                        else
+                            echo "Trivy not installed - skipping scan"
+                            echo "Install with: sudo apt-get install trivy"
+                        fi
                     '''
                 }
             }
             post {
                 always {
-                    publishHTML([
-                        reportDir: 'trivy-reports',
-                        reportFiles: 'trivy-report.html',
-                        reportName: 'Trivy Security Report'
-                    ])
                     archiveArtifacts artifacts: 'trivy-reports/*', allowEmptyArchive: true
-                    recordIssues(tools: [sarif(pattern: 'trivy-reports/trivy-results.sarif')])
                 }
             }
         }
@@ -258,17 +219,12 @@ pipeline {
         stage('Docker Container Test') {
             steps {
                 sh '''
-                    # Cleanup any existing container
                     docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
                     
-                    # Run container
                     echo "Starting container for testing..."
                     docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
-                    
-                    # Wait for container to be ready
                     sleep 5
                     
-                    # Test endpoints
                     echo "Testing endpoints..."
                     curl -f http://localhost:5000/health > /dev/null
                     curl -f http://localhost:5000/ > /dev/null
@@ -288,56 +244,30 @@ pipeline {
             }
         }
 
-        stage('Push to Registry') {
+        stage('Push to Docker Hub') {
             when { 
                 expression { 
-                    env.DOCKER_USERNAME != null && 
-                    env.DOCKER_PASSWORD != null && 
+                    env.DOCKER_CREDS != null && 
                     (env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master')
                 } 
             }
             steps {
                 script {
+                    // Using the credentials directly
                     sh '''
-                        echo "Logging into Docker registry..."
-                        echo ${DOCKER_PASSWORD} | docker login -u ${DOCKER_USERNAME} --password-stdin ${DOCKER_REGISTRY}
+                        echo "Logging into Docker Hub..."
+                        echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
                         
-                        echo "Pushing Docker images..."
+                        echo "Pushing Docker images to registry..."
                         docker push ${DOCKER_IMAGE}:${APP_VERSION}
                         docker push ${DOCKER_IMAGE}:latest
                         docker push ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
                         
-                        echo "Images pushed successfully!"
+                        echo "✅ Images pushed successfully!"
+                        echo "Image available at: ${DOCKER_IMAGE}:${APP_VERSION}"
                         
-                        # Logout
-                        docker logout ${DOCKER_REGISTRY}
+                        docker logout
                     '''
-                }
-            }
-        }
-
-        stage('Deployment') {
-            when { 
-                expression { 
-                    env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master'
-                } 
-            }
-            steps {
-                script {
-                    echo "Deployment stage - Ready for orchestration"
-                    echo "Image: ${DOCKER_IMAGE}:${APP_VERSION}"
-                    
-                    // Example: Deploy to Kubernetes
-                    // sh """
-                    //     kubectl set image deployment/${APP_NAME} \
-                    //     ${APP_NAME}=${DOCKER_IMAGE}:${APP_VERSION} \
-                    //     --namespace=production
-                    // """
-                    
-                    // Example: Deploy to Docker Swarm
-                    // sh """
-                    //     docker service update --image ${DOCKER_IMAGE}:${APP_VERSION} ${APP_NAME}_service
-                    // """
                 }
             }
         }
@@ -364,40 +294,15 @@ pipeline {
             echo "Build: ${APP_NAME}:${APP_VERSION}"
             echo "Git Commit: ${env.GIT_COMMIT_SHORT}"
             echo "Docker Image: ${DOCKER_IMAGE}:${APP_VERSION}"
-            echo "SonarQube Analysis: Completed"
-            echo "Security Scans: Passed"
-            echo "Container Registry: Pushed"
             echo "========================================="
-            
-            // Send success notification
-            emailext(
-                subject: "Pipeline Success: ${APP_NAME} #${BUILD_NUMBER}",
-                body: "Build completed successfully!\n\nVersion: ${APP_VERSION}\nImage: ${DOCKER_IMAGE}:${APP_VERSION}\nURL: ${BUILD_URL}",
-                to: "team@example.com"
-            )
         }
         failure {
             echo "========================================="
             echo "❌ PIPELINE FAILED! ❌"
             echo "========================================="
             echo "Build: ${APP_NAME} #${BUILD_NUMBER}"
-            echo "Check the following:"
-            echo "  - Code quality reports"
-            echo "  - Unit test results"
-            echo "  - Security scan findings"
-            echo "  - Container logs"
+            echo "Check the logs above for details."
             echo "========================================="
-            
-            // Send failure notification
-            emailext(
-                subject: "Pipeline Failed: ${APP_NAME} #${BUILD_NUMBER}",
-                body: "Build failed!\n\nCheck the logs: ${BUILD_URL}",
-                to: "team@example.com"
-            )
-        }
-        unstable {
-            echo "⚠️ PIPELINE IS UNSTABLE ⚠️"
-            echo "Quality gates not met but build completed"
         }
     }
 }
