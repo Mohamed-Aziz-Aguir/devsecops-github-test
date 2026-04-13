@@ -8,13 +8,12 @@ pipeline {
 
     options {
         timestamps()
-        ansiColor('xterm')
     }
 
     stages {
 
         // =========================
-        // Checkout Source Code
+        // Checkout
         // =========================
         stage('Checkout') {
             steps {
@@ -23,7 +22,7 @@ pipeline {
         }
 
         // =========================
-        // Python Setup
+        // Setup Environment
         // =========================
         stage('Setup Environment') {
             steps {
@@ -39,7 +38,7 @@ pipeline {
         // =========================
         // Code Quality
         // =========================
-        stage('Code Quality - Flake8') {
+        stage('Flake8') {
             steps {
                 sh '''
                     . venv/bin/activate
@@ -48,7 +47,7 @@ pipeline {
             }
         }
 
-        stage('Code Quality - Pylint') {
+        stage('Pylint') {
             steps {
                 sh '''
                     . venv/bin/activate
@@ -60,7 +59,7 @@ pipeline {
         // =========================
         // Tests
         // =========================
-        stage('Unit Tests') {
+        stage('Tests') {
             steps {
                 sh '''
                     . venv/bin/activate
@@ -70,9 +69,9 @@ pipeline {
         }
 
         // =========================
-        // Security Scans
+        // Security
         // =========================
-        stage('SAST - Bandit') {
+        stage('Bandit') {
             steps {
                 sh '''
                     . venv/bin/activate
@@ -81,7 +80,7 @@ pipeline {
             }
         }
 
-        stage('Dependency Scan - pip-audit') {
+        stage('Dependency Scan') {
             steps {
                 sh '''
                     . venv/bin/activate
@@ -91,7 +90,7 @@ pipeline {
         }
 
         // =========================
-        // Docker Build
+        // Docker
         // =========================
         stage('Docker Build') {
             steps {
@@ -101,9 +100,6 @@ pipeline {
             }
         }
 
-        // =========================
-        // Run Application
-        // =========================
         stage('Run Container') {
             steps {
                 sh '''
