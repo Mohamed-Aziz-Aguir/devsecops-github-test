@@ -94,7 +94,7 @@ pipeline {
                         reportFiles: 'index.html',
                         reportName: 'Coverage Report',
                         allowMissing: true,
-                        keepAll: true
+                        keepAll: true,
                         alwaysLinkToLastBuild: false
                     ])
                 }
@@ -119,7 +119,7 @@ pipeline {
                                 reportFiles: 'bandit-report.html',
                                 reportName: 'Bandit Security Report',
                                 allowMissing: true,
-                                keepAll: true
+                                keepAll: true,
                                 alwaysLinkToLastBuild: false
                             ])
                             archiveArtifacts artifacts: 'bandit-report.json', allowEmptyArchive: true
