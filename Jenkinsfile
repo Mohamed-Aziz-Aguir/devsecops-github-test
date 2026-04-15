@@ -86,7 +86,20 @@ pipeline {
                         --junitxml=test-results.xml
                 '''
             }
-            post { always { junit 'test-results.xml' publishHTML([ allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'htmlcov', reportFiles: 'index.html', reportName: 'Coverage Report' ]) } } }
+            post {
+                always {
+                    junit 'test-results.xml'
+                    publishHTML([
+                        reportDir: 'htmlcov',
+                        reportFiles: 'index.html',
+                        reportName: 'Coverage Report',
+                        allowMissing: true,
+                        keepAll: true
+                        alwaysLinkToLastBuild: false
+                    ])
+                }
+            }
+        }
 
         // ✅ Security Scanning is now a proper top-level stage (was wrongly nested before)
         stage('Security Scanning') {
@@ -107,6 +120,7 @@ pipeline {
                                 reportName: 'Bandit Security Report',
                                 allowMissing: true,
                                 keepAll: true
+                                alwaysLinkToLastBuild: false
                             ])
                             archiveArtifacts artifacts: 'bandit-report.json', allowEmptyArchive: true
                         }
