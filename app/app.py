@@ -2,13 +2,12 @@
 """
 Production banking backend with JWT authentication, PostgreSQL,
 and core banking operations (deposit, withdraw, transfer).
-Single‑file version – no external blueprint modules required.
+Single‑file version – all blueprints defined inline.
 """
 import os
 import time
 import logging
 from datetime import datetime, timedelta
-from functools import wraps
 
 from flask import Flask, jsonify, request, g, Blueprint
 from flask_sqlalchemy import SQLAlchemy
@@ -60,16 +59,14 @@ class Config:
 
 class DevelopmentConfig(Config):
     DEBUG = True
-    SQLALCHEMY_DATABASE_URI = os.environ.get(
-        'DATABASE_URL',
-        'postgresql://bankuser:bankpass@localhost:5432/bankdb'
-    )
     RATELIMIT_ENABLED = False
 
 
 class TestingConfig(Config):
     TESTING = True
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    # SQLite does not support pool_size, pool_recycle, etc.
+    SQLALCHEMY_ENGINE_OPTIONS = {}
     RATELIMIT_ENABLED = False
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(seconds=5)
 
