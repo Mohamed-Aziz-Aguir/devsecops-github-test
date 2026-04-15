@@ -152,76 +152,34 @@ pipeline {
             }
         }
 
-        // ========================
-        // FIXED: SonarQube analysis (stage 1)
-        // ========================
-        stage('SonarQube Analysis') {
-            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
-            steps {
-                script {
-                    // Replace 'sonarqube' with the EXACT name of your SonarQube server in Jenkins config
-                    withSonarQubeEnv('sonarqube') {
-                        sh '''
-                            echo "Running SonarQube analysis..."
-                            sonar-scanner \
-                                -Dsonar.projectKey=${APP_NAME} \
-                                -Dsonar.projectName="${APP_NAME}" \
-                                -Dsonar.projectVersion=${APP_VERSION} \
-                                -Dsonar.sources=app \
-                                -Dsonar.tests=tests \
-                                -Dsonar.python.coverage.reportPaths=coverage.xml \
-                                -Dsonar.exclusions=**/venv/**,**/__pycache__/** \
-                                -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
-                                -Dsonar.sourceEncoding=UTF-8 \
-                                -Dsonar.token=${SONAR_TOKEN}
-                            echo "Scanner finished."
-                        '''
-
-                        // Extract the CE task ID from the scanner output file
-                        def taskId = sh(
-                            script: '''
-                                grep -m1 "^ceTaskId=" .scannerwork/report-task.txt 2>/dev/null | cut -d= -f2 || echo ""
-                            ''',
-                            returnStdout: true
-                        ).trim()
-
-                        if (!taskId) {
-                            error "Failed to retrieve SonarQube CE task ID. Analysis may have failed."
-                        }
-
-                        echo "SonarQube CE task ID: ${taskId}"
-                        // Stash the task ID for the next stage
-                        writeFile file: 'sonar-task-id.txt', text: taskId
-                        stash name: 'sonar-task-id', includes: 'sonar-task-id.txt'
-                    }
+    stage('SonarQube Analysis & Quality Gate') {
+    when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
+    steps {
+        script {
+            withSonarQubeEnv('sonarqube') {
+                sh '''
+                    echo "Running SonarQube analysis..."
+                    sonar-scanner \
+                        -Dsonar.projectKey=${APP_NAME} \
+                        -Dsonar.projectName="${APP_NAME}" \
+                        -Dsonar.projectVersion=${APP_VERSION} \
+                        -Dsonar.sources=app \
+                        -Dsonar.tests=tests \
+                        -Dsonar.python.coverage.reportPaths=coverage.xml \
+                        -Dsonar.exclusions=**/venv/**,**/__pycache__/** \
+                        -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
+                        -Dsonar.sourceEncoding=UTF-8 \
+                        -Dsonar.token=${SONAR_TOKEN}
+                    echo "Scanner finished, waiting for quality gate..."
+                '''
+                timeout(time: 1, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: false
                 }
+                echo "Quality Gate check finished."
             }
         }
-
-        // ========================
-        // Quality Gate (stage 2)
-        // ========================
-        stage('Quality Gate') {
-            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
-            steps {
-                script {
-                    // Restore the task ID
-                    unstash 'sonar-task-id'
-                    def taskId = readFile('sonar-task-id.txt').trim()
-                    echo "Waiting for quality gate for task: ${taskId}"
-
-                    // Use the same SonarQube server name
-                    withSonarQubeEnv('sonarqube') {
-                        timeout(time: 10, unit: 'MINUTES') {
-                            // Pass the taskId explicitly to waitForQualityGate
-                            waitForQualityGate taskId: taskId, abortPipeline: false
-                        }
-                        echo "Quality Gate check finished."
-                    }
-                }
-            }
-        }
-
+    }
+}
         stage('Trivy File Scan') {
             steps {
                 sh '''
