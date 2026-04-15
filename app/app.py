@@ -2,19 +2,19 @@
 """
 Production banking backend with JWT authentication, PostgreSQL,
 and core banking operations (deposit, withdraw, transfer).
+Single‑file version – no external blueprint modules required.
 """
 import os
-import re
 import time
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from functools import wraps
 
-from flask import Flask, jsonify, request, g, current_app
+from flask import Flask, jsonify, request, g, Blueprint
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import (
     JWTManager, create_access_token, create_refresh_token,
-    jwt_required, get_jwt_identity, get_jwt
+    jwt_required, get_jwt_identity
 )
 from flask_bcrypt import Bcrypt
 from flask_talisman import Talisman
@@ -59,7 +59,6 @@ class Config:
 
 
 class DevelopmentConfig(Config):
-    """Development configuration."""
     DEBUG = True
     SQLALCHEMY_DATABASE_URI = os.environ.get(
         'DATABASE_URL',
@@ -69,7 +68,6 @@ class DevelopmentConfig(Config):
 
 
 class TestingConfig(Config):
-    """Testing configuration."""
     TESTING = True
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
     RATELIMIT_ENABLED = False
@@ -77,11 +75,9 @@ class TestingConfig(Config):
 
 
 class ProductionConfig(Config):
-    """Production configuration."""
     DEBUG = False
     TESTING = False
     RATELIMIT_ENABLED = True
-    # Enforce security headers in production
     TALISMAN_FORCE_HTTPS = os.environ.get('FORCE_HTTPS', 'true').lower() == 'true'
     TALISMAN_STRICT_TRANSPORT_SECURITY = True
     TALISMAN_SESSION_COOKIE_SECURE = True
@@ -138,7 +134,7 @@ def create_app(config_name=None):
     def log_request(response):
         if hasattr(g, 'start_time'):
             duration = time.time() - g.start_time
-            current_app.logger.info(
+            app.logger.info(
                 '%s %s - %s (%.3fs)',
                 request.method, request.path, response.status_code, duration
             )
@@ -156,11 +152,7 @@ def create_app(config_name=None):
             "status": "operational"
         })
 
-    # Register blueprints
-    from app.auth import auth_bp
-    from app.accounts import accounts_bp
-    from app.transactions import transactions_bp
-
+    # Register blueprints (defined below)
     app.register_blueprint(auth_bp, url_prefix='/auth')
     app.register_blueprint(accounts_bp, url_prefix='/accounts')
     app.register_blueprint(transactions_bp, url_prefix='/transactions')
@@ -203,13 +195,12 @@ class Account(db.Model):
     __tablename__ = 'accounts'
     id = db.Column(db.Integer, primary_key=True)
     account_number = db.Column(db.String(20), unique=True, nullable=False)
-    account_type = db.Column(db.String(20), nullable=False, default='checking')  # checking, savings
+    account_type = db.Column(db.String(20), nullable=False, default='checking')
     balance = db.Column(db.Numeric(10, 2), nullable=False, default=0.00)
     currency = db.Column(db.String(3), nullable=False, default='USD')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
-    # Relationships
     outgoing_transactions = db.relationship(
         'Transaction', foreign_keys='Transaction.from_account_id', backref='source'
     )
@@ -232,7 +223,7 @@ class Transaction(db.Model):
     __tablename__ = 'transactions'
     id = db.Column(db.Integer, primary_key=True)
     amount = db.Column(db.Numeric(10, 2), nullable=False)
-    type = db.Column(db.String(20), nullable=False)  # deposit, withdrawal, transfer
+    type = db.Column(db.String(20), nullable=False)
     status = db.Column(db.String(20), nullable=False, default='pending')
     description = db.Column(db.String(200))
     reference = db.Column(db.String(50), unique=True)
@@ -253,7 +244,6 @@ class Transaction(db.Model):
             'to_account': self.to_account_id
         }
 
-
 # ----------------------------------------------------------------------
 # 4. Request/Response Schemas (Marshmallow)
 # ----------------------------------------------------------------------
@@ -270,8 +260,14 @@ class LoginSchema(Schema):
 
 
 class CreateAccountSchema(Schema):
-    account_type = fields.Str(validate=validate.OneOf(['checking', 'savings']), missing='checking')
-    currency = fields.Str(validate=validate.Regexp(r'^[A-Z]{3}$'), missing='USD')
+    account_type = fields.Str(
+        validate=validate.OneOf(['checking', 'savings']),
+        load_default='checking'
+    )
+    currency = fields.Str(
+        validate=validate.Regexp(r'^[A-Z]{3}$'),
+        load_default='USD'
+    )
 
 
 class DepositSchema(Schema):
@@ -288,8 +284,7 @@ class TransferSchema(Schema):
     from_account_id = fields.Int(required=True)
     to_account_id = fields.Int(required=True)
     amount = fields.Decimal(required=True, validate=validate.Range(min=0.01, max=50000))
-    description = fields.Str(validate=validate.Length(max=200), missing='')
-
+    description = fields.Str(validate=validate.Length(max=200), load_default='')
 
 # ----------------------------------------------------------------------
 # 5. Helper Functions
@@ -300,11 +295,9 @@ def generate_account_number():
     import random
     import string
     while True:
-        # Format: BANK-XXXXXXXX (8 random alphanumeric chars)
         account_num = 'BANK-' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         if not Account.query.filter_by(account_number=account_num).first():
             return account_num
-
 
 def generate_transaction_reference():
     """Generate a unique transaction reference."""
@@ -314,7 +307,6 @@ def generate_transaction_reference():
     random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
     return f'TXN-{timestamp}-{random_part}'
 
-
 def handle_validation_error(error):
     """Return validation errors as JSON."""
     return jsonify({
@@ -322,7 +314,6 @@ def handle_validation_error(error):
         'message': error.messages,
         'status': 400
     }), 400
-
 
 # ----------------------------------------------------------------------
 # 6. JWT Callbacks
@@ -339,7 +330,6 @@ def user_lookup_callback(_jwt_header, jwt_data):
 
 @jwt.token_in_blocklist_loader
 def check_if_token_revoked(jwt_header, jwt_payload):
-    # For future implementation: check against Redis blacklist
     return False
 
 @jwt.expired_token_loader
@@ -366,27 +356,18 @@ def unauthorized_callback(error):
         'status': 401
     }), 401
 
-
 # ----------------------------------------------------------------------
-# 7. Blueprint Definitions (Authentication, Accounts, Transactions)
+# 7. Blueprints (defined inline)
 # ----------------------------------------------------------------------
 
-# These blueprints must be placed in separate files: auth.py, accounts.py, transactions.py
-# For a single-file deployment, you can define them here. For better maintainability,
-# split them into modules as your project grows.
-
-# For brevity, I'm showing the blueprint structure. In a real implementation,
-# each blueprint would be in its own file (app/auth.py, app/accounts.py, app/transactions.py).
-# Below are the route definitions that would go inside those blueprints.
-
-# ===================== AUTH BLUEPRINT =====================
-from flask import Blueprint
 auth_bp = Blueprint('auth', __name__)
+accounts_bp = Blueprint('accounts', __name__)
+transactions_bp = Blueprint('transactions', __name__)
 
+# ---------- Auth Blueprint ----------
 @auth_bp.route('/register', methods=['POST'])
 @limiter.limit('5 per hour')
 def register():
-    """Register a new user."""
     data = request.get_json()
     schema = RegisterSchema()
     try:
@@ -394,16 +375,12 @@ def register():
     except ValidationError as err:
         return handle_validation_error(err)
 
-    # Check if user exists
     if User.query.filter_by(username=validated['username']).first():
         return jsonify({'error': 'Username already exists', 'status': 409}), 409
     if User.query.filter_by(email=validated['email']).first():
         return jsonify({'error': 'Email already registered', 'status': 409}), 409
 
-    user = User(
-        username=validated['username'],
-        email=validated['email']
-    )
+    user = User(username=validated['username'], email=validated['email'])
     user.set_password(validated['password'])
     db.session.add(user)
     db.session.commit()
@@ -420,7 +397,6 @@ def register():
 @auth_bp.route('/login', methods=['POST'])
 @limiter.limit('10 per minute')
 def login():
-    """Authenticate user and return tokens."""
     data = request.get_json()
     schema = LoginSchema()
     try:
@@ -443,7 +419,6 @@ def login():
 @auth_bp.route('/refresh', methods=['POST'])
 @jwt_required(refresh=True)
 def refresh():
-    """Refresh access token."""
     current_user = get_jwt_identity()
     access_token = create_access_token(identity=current_user)
     return jsonify({'access_token': access_token}), 200
@@ -451,17 +426,12 @@ def refresh():
 @auth_bp.route('/logout', methods=['POST'])
 @jwt_required()
 def logout():
-    """Logout – token revocation would be implemented here."""
-    # In a production setup, add the token to a blocklist (Redis)
     return jsonify({'message': 'Successfully logged out'}), 200
 
-# ===================== ACCOUNTS BLUEPRINT =====================
-accounts_bp = Blueprint('accounts', __name__)
-
+# ---------- Accounts Blueprint ----------
 @accounts_bp.route('', methods=['GET'])
 @jwt_required()
 def get_accounts():
-    """List all accounts for the authenticated user."""
     current_user_id = get_jwt_identity()
     accounts = Account.query.filter_by(user_id=current_user_id).all()
     return jsonify({'accounts': [acc.to_dict() for acc in accounts]}), 200
@@ -469,7 +439,6 @@ def get_accounts():
 @accounts_bp.route('/<int:account_id>/balance', methods=['GET'])
 @jwt_required()
 def get_balance(account_id):
-    """Check balance of a specific account."""
     current_user_id = get_jwt_identity()
     account = Account.query.filter_by(id=account_id, user_id=current_user_id).first()
     if not account:
@@ -483,7 +452,6 @@ def get_balance(account_id):
 @accounts_bp.route('', methods=['POST'])
 @jwt_required()
 def create_account():
-    """Open a new account."""
     current_user_id = get_jwt_identity()
     data = request.get_json() or {}
     schema = CreateAccountSchema()
@@ -502,14 +470,11 @@ def create_account():
     db.session.commit()
     return jsonify({'message': 'Account created', 'account': account.to_dict()}), 201
 
-# ===================== TRANSACTIONS BLUEPRINT =====================
-transactions_bp = Blueprint('transactions', __name__)
-
+# ---------- Transactions Blueprint ----------
 @transactions_bp.route('/deposit', methods=['POST'])
 @jwt_required()
 @limiter.limit('30 per minute')
 def deposit():
-    """Deposit money into an account."""
     current_user_id = get_jwt_identity()
     data = request.get_json()
     schema = DepositSchema()
@@ -544,7 +509,6 @@ def deposit():
 @jwt_required()
 @limiter.limit('30 per minute')
 def withdraw():
-    """Withdraw money from an account."""
     current_user_id = get_jwt_identity()
     data = request.get_json()
     schema = WithdrawSchema()
@@ -582,7 +546,6 @@ def withdraw():
 @jwt_required()
 @limiter.limit('30 per minute')
 def transfer():
-    """Transfer money between accounts."""
     current_user_id = get_jwt_identity()
     data = request.get_json()
     schema = TransferSchema()
@@ -591,15 +554,10 @@ def transfer():
     except ValidationError as err:
         return handle_validation_error(err)
 
-    # Verify source account belongs to the user
-    source_account = Account.query.filter_by(
-        id=validated['from_account_id'],
-        user_id=current_user_id
-    ).first()
+    source_account = Account.query.filter_by(id=validated['from_account_id'], user_id=current_user_id).first()
     if not source_account:
         return jsonify({'error': 'Source account not found', 'status': 404}), 404
 
-    # Destination account can be any account
     dest_account = Account.query.filter_by(id=validated['to_account_id']).first()
     if not dest_account:
         return jsonify({'error': 'Destination account not found', 'status': 404}), 404
@@ -608,7 +566,6 @@ def transfer():
     if source_account.balance < amount:
         return jsonify({'error': 'Insufficient funds', 'status': 400}), 400
 
-    # Perform transfer
     source_account.balance -= amount
     dest_account.balance += amount
 
@@ -634,7 +591,6 @@ def transfer():
 @transactions_bp.route('/history', methods=['GET'])
 @jwt_required()
 def transaction_history():
-    """Get transaction history for the authenticated user's accounts."""
     current_user_id = get_jwt_identity()
     user_accounts = Account.query.filter_by(user_id=current_user_id).all()
     account_ids = [acc.id for acc in user_accounts]
@@ -650,7 +606,6 @@ def transaction_history():
         'transactions': [txn.to_dict() for txn in transactions],
         'count': len(transactions)
     }), 200
-
 
 # ----------------------------------------------------------------------
 # 8. App Initialization
