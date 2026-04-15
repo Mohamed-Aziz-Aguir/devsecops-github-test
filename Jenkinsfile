@@ -101,7 +101,7 @@ pipeline {
             }
         }
 
-        // ✅ Security Scanning is now a proper top-level stage (was wrongly nested before)
+
         stage('Security Scanning') {
             parallel {
                 stage('Bandit') {
@@ -232,7 +232,6 @@ pipeline {
         }
 
         stage('Push to Docker Hub') {
-            // ✅ Removed broken env.DOCKER_CREDS check — guard on branch only
             when {
                 anyOf {
                     branch 'main'
@@ -252,7 +251,7 @@ pipeline {
             }
         }
 
-    } // end stages
+    } 
 
     post {
         always {
