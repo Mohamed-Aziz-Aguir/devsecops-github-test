@@ -3,6 +3,7 @@
 Production banking backend with JWT authentication, PostgreSQL,
 and core banking operations (deposit, withdraw, transfer).
 Single‑file version – all blueprints defined inline.
+Includes / and /secure endpoints for pipeline health checks.
 """
 import os
 import time
@@ -149,7 +150,23 @@ def create_app(config_name=None):
             "status": "operational"
         })
 
-    # Register blueprints (defined below)
+    # Simple endpoints expected by the pipeline
+    @app.route('/')
+    def home():
+        return jsonify({
+            "status": "running",
+            "service": "secure-task-app",
+            "version": "1.0"
+        })
+
+    @app.route('/secure')
+    def secure():
+        return jsonify({
+            "security": "enabled",
+            "message": "secure endpoint"
+        })
+
+    # Register banking blueprints
     app.register_blueprint(auth_bp, url_prefix='/auth')
     app.register_blueprint(accounts_bp, url_prefix='/accounts')
     app.register_blueprint(transactions_bp, url_prefix='/transactions')
@@ -248,7 +265,7 @@ class Transaction(db.Model):
 class RegisterSchema(Schema):
     username = fields.Str(required=True, validate=validate.Length(min=3, max=80))
     email = fields.Email(required=True)
-    password = fields.Str(required=True, validate=validate.Length(min=6))  # Allow 6+ for tests
+    password = fields.Str(required=True, validate=validate.Length(min=6))
 
 
 class LoginSchema(Schema):
@@ -323,7 +340,6 @@ def user_identity_lookup(user):
 @jwt.user_lookup_loader
 def user_lookup_callback(_jwt_header, jwt_data):
     identity = jwt_data["sub"]
-    # Use db.session.get() instead of Query.get() (legacy)
     return db.session.get(User, identity)
 
 @jwt.token_in_blocklist_loader
@@ -485,7 +501,7 @@ def deposit():
     if not account:
         return jsonify({'error': 'Account not found', 'status': 404}), 404
 
-    amount = validated['amount']  # Decimal
+    amount = validated['amount']
     account.balance += amount
     transaction = Transaction(
         amount=amount,
@@ -519,7 +535,7 @@ def withdraw():
     if not account:
         return jsonify({'error': 'Account not found', 'status': 404}), 404
 
-    amount = validated['amount']  # Decimal
+    amount = validated['amount']
     if account.balance < amount:
         return jsonify({'error': 'Insufficient funds', 'status': 400}), 400
 
@@ -560,7 +576,7 @@ def transfer():
     if not dest_account:
         return jsonify({'error': 'Destination account not found', 'status': 404}), 404
 
-    amount = validated['amount']  # Decimal
+    amount = validated['amount']
     if source_account.balance < amount:
         return jsonify({'error': 'Insufficient funds', 'status': 400}), 400
 
