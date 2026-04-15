@@ -13,7 +13,7 @@ pipeline {
         SONAR_TOKEN      = credentials('sonar-token')
         DOCKER_CREDS     = credentials('Docker-Hub')
 
-        // Add sonar-scanner to PATH so Jenkins can find it
+        // Add sonar-scanner to PATH
         PATH             = "/opt/sonar-scanner/bin:${env.PATH}"
     }
 
@@ -101,7 +101,6 @@ pipeline {
             }
         }
 
-
         stage('Security Scanning') {
             parallel {
                 stage('Bandit') {
@@ -165,6 +164,41 @@ pipeline {
             }
         }
 
+        // **NEW: Quality Gate** – waits for SonarQube to evaluate the scan
+        stage('Quality Gate') {
+            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
+            steps {
+                script {
+                    echo "Waiting for SonarQube Quality Gate..."
+                    timeout(time: 5, unit: 'MINUTES') {
+                        waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
+                    }
+                }
+            }
+        }
+
+        // **NEW: Trivy filesystem scan** – scans source code (optional but useful)
+        stage('Trivy File Scan') {
+            steps {
+                sh '''
+                    echo "Running Trivy filesystem scan on source code..."
+                    mkdir -p trivy-reports
+                    if command -v trivy > /dev/null 2>&1; then
+                        trivy fs . --format json --output trivy-reports/trivy-fs.json || true
+                        trivy fs . --format table --output trivy-reports/trivy-fs.txt || true
+                        echo "Trivy filesystem scan completed"
+                    else
+                        echo "Trivy not installed - skipping filesystem scan"
+                    fi
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy-reports/trivy-fs.*', allowEmptyArchive: true
+                }
+            }
+        }
+
         stage('Docker Build') {
             steps {
                 sh '''
@@ -180,7 +214,7 @@ pipeline {
             }
         }
 
-        stage('Trivy Security Scan') {
+        stage('Trivy Image Scan') {
             steps {
                 sh '''
                     echo "Scanning Docker image with Trivy..."
@@ -191,11 +225,14 @@ pipeline {
                             ${APP_NAME}:${APP_VERSION} || true
                         trivy image --severity HIGH,CRITICAL \
                             --format json \
-                            --output trivy-reports/trivy-high-critical.json \
+                            --output trivy-reports/trivy-image-high-critical.json \
                             ${APP_NAME}:${APP_VERSION} || true
-                        echo "Trivy scan completed"
+                        # Also generate a full report (all severities) for completeness
+                        trivy image --format json --output trivy-reports/trivy-image-full.json \
+                            ${APP_NAME}:${APP_VERSION} || true
+                        echo "Trivy image scan completed"
                     else
-                        echo "Trivy not installed - skipping scan"
+                        echo "Trivy not installed - skipping image scan"
                     fi
                 '''
             }
@@ -231,6 +268,75 @@ pipeline {
             }
         }
 
+        stage('DAST Scan') {
+            steps {
+                script {
+                    echo '🔍 Running OWASP ZAP baseline scan on the running Flask app...'
+                    
+                    // Start container again (in case previous test removed it)
+                    sh '''
+                        docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
+                        docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
+                        sleep 5
+                    '''
+
+                    def zapExitCode = sh(
+                        script: '''
+                            docker run --rm --user root --network host \
+                                -v $(pwd):/zap/wrk:rw \
+                                -t zaproxy/zap-stable zap-baseline.py \
+                                -t http://localhost:5000 \
+                                -r zap_report.html -J zap_report.json || true
+                        ''',
+                        returnStatus: true
+                    )
+
+                    echo "ZAP scan finished with exit code: ${zapExitCode}"
+
+                    // Parse JSON report to extract counts (if exists)
+                    if (fileExists('zap_report.json')) {
+                        try {
+                            def zapJson = readJSON file: 'zap_report.json'
+                            def highCount = zapJson.site.collect { site ->
+                                site.alerts.findAll { it.risk == 'High' }.size()
+                            }.sum() ?: 0
+                            def mediumCount = zapJson.site.collect { site ->
+                                site.alerts.findAll { it.risk == 'Medium' }.size()
+                            }.sum() ?: 0
+                            def lowCount = zapJson.site.collect { site ->
+                                site.alerts.findAll { it.risk == 'Low' }.size()
+                            }.sum() ?: 0
+
+                            echo "✅ High severity issues: ${highCount}"
+                            echo "⚠️ Medium severity issues: ${mediumCount}"
+                            echo "ℹ️ Low severity issues: ${lowCount}"
+                        } catch (Exception e) {
+                            echo "Could not parse ZAP report: ${e.message}"
+                        }
+                    } else {
+                        echo "ZAP JSON report not found, continuing build..."
+                    }
+
+                    echo "✅ DAST scan completed."
+                }
+            }
+            post {
+                always {
+                    // Stop and remove the container used for DAST
+                    sh 'docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true'
+                    publishHTML([
+                        reportDir: '.',
+                        reportFiles: 'zap_report.html',
+                        reportName: 'OWASP ZAP Report',
+                        allowMissing: true,
+                        keepAll: true,
+                        alwaysLinkToLastBuild: false
+                    ])
+                    archiveArtifacts artifacts: 'zap_report.html, zap_report.json', allowEmptyArchive: true
+                }
+            }
+        }
+
         stage('Push to Docker Hub') {
             when {
                 anyOf {
@@ -250,16 +356,29 @@ pipeline {
                 '''
             }
         }
-
-    } 
+    }
 
     post {
         always {
-            sh '''
-                docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
-                docker images ${APP_NAME} --format "{{.Repository}}:{{.Tag}}" | tail -n +6 | xargs -r docker rmi || true
-            '''
-            cleanWs()
+            script {
+                // Collect all security reports into one directory for easy archiving
+                sh '''
+                    mkdir -p security-reports
+                    cp bandit-report.* security-reports/ 2>/dev/null || true
+                    cp audit-report.json security-reports/ 2>/dev/null || true
+                    cp pylint-report.txt security-reports/ 2>/dev/null || true
+                    cp trivy-reports/* security-reports/ 2>/dev/null || true
+                    cp zap_report.* security-reports/ 2>/dev/null || true
+                '''
+                archiveArtifacts artifacts: 'security-reports/**', allowEmptyArchive: true
+
+                // Clean up containers and old images
+                sh '''
+                    docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
+                    docker images ${APP_NAME} --format "{{.Repository}}:{{.Tag}}" | tail -n +6 | xargs -r docker rmi || true
+                '''
+                cleanWs()
+            }
         }
         success {
             echo "========================================="
@@ -268,12 +387,72 @@ pipeline {
             echo "Git Commit: ${env.GIT_COMMIT_SHORT}"
             echo "SonarQube: ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
             echo "========================================="
+
+            script {
+                def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'GitHub User'
+                emailext(
+                    subject: "✅ Pipeline SUCCESS: ${APP_NAME} #${BUILD_NUMBER}",
+                    body: """
+                        <html>
+                            <body style="font-family: Arial, sans-serif;">
+                                <h2>DevSecOps Pipeline Report</h2>
+                                <hr>
+                                <h3>Build Information</h3>
+                                <table border="1" cellpadding="10">
+                                    <tr><td><b>Job Name</b></td><td>${env.JOB_NAME}</td></tr>
+                                    <tr><td><b>Build Number</b></td><td>${env.BUILD_NUMBER}</td></tr>
+                                    <tr><td><b>Status</b></td><td style="color:green"><b>SUCCESS</b></td></tr>
+                                    <tr><td><b>Started by</b></td><td>${buildUser}</td></tr>
+                                    <tr><td><b>Build URL</b></td><td><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
+                                </table>
+                                <hr>
+                                <h3>Security Scans Performed</h3>
+                                <ul>
+                                    <li>✅ SAST: SonarQube</li>
+                                    <li>✅ Bandit (Python)</li>
+                                    <li>✅ Dependency: pip-audit</li>
+                                    <li>✅ Container: Trivy (image + filesystem)</li>
+                                    <li>✅ DAST: OWASP ZAP</li>
+                                </ul>
+                                <hr>
+                                <p>Artifacts attached. <a href="${env.BUILD_URL}">Full build log</a></p>
+                            </body>
+                        </html>
+                    """,
+                    to: 'mohamedaziz.aguir@gmail.com', 
+                    from: 'jenkins@your-domain.com',
+                    mimeType: 'text/html',
+                    attachmentsPattern: 'security-reports/**'
+                )
+            }
         }
         failure {
             echo "========================================="
             echo "PIPELINE FAILED - Check logs above"
             echo "Build: ${APP_NAME} #${BUILD_NUMBER}"
             echo "========================================="
+
+            // **NEW: Email notification on failure**
+            script {
+                def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'GitHub User'
+                emailext(
+                    subject: "❌ Pipeline FAILED: ${APP_NAME} #${BUILD_NUMBER}",
+                    body: """
+                        <html>
+                            <body>
+                                <h2>Build Failed</h2>
+                                <p>Job: ${env.JOB_NAME}<br>
+                                Build: ${env.BUILD_NUMBER}<br>
+                                Started by: ${buildUser}<br>
+                                <a href="${env.BUILD_URL}">Click here for console output</a></p>
+                            </body>
+                        </html>
+                    """,
+                    to: 'mohamedaziz.aguir@gmail.com',
+                    from: 'jenkins@your-domain.com',
+                    mimeType: 'text/html'
+                )
+            }
         }
     }
 }
