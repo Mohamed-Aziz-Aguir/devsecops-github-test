@@ -9,7 +9,7 @@ pipeline {
         DOCKER_IMAGE     = "${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${APP_NAME}"
         PYTHONPATH       = "${env.WORKSPACE}"
 
-        _HOST_URL   = "http://localhost:9000"
+        SONAR_HOST_URL   = "http://localhost:9000"
         SONAR_TOKEN      = credentials('sonar-token')
         DOCKER_CREDS     = credentials('Docker-Hub')
 
@@ -142,49 +142,49 @@ pipeline {
             }
         }
 
+        // ========== NEW: SonarQube Analysis + Quality Gate (fixed) ==========
         stage('SonarQube Analysis') {
-    when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
-    steps {
-        script {
-            // Wrap the analysis inside withSonarQubeEnv
-            withSonarQubeEnv('SonarQube') {   // 'SonarQube' is the server name configured in Jenkins
-                sh '''
-                    echo "Running SonarQube analysis..."
-                    sonar-scanner \
-                        -Dsonar.projectKey=${APP_NAME} \
-                        -Dsonar.projectName="${APP_NAME}" \
-                        -Dsonar.projectVersion=${APP_VERSION} \
-                        -Dsonar.sources=app \
-                        -Dsonar.tests=tests \
-                        -Dsonar.python.coverage.reportPaths=coverage.xml \
-                        -Dsonar.exclusions=**/venv/**,**/__pycache__/** \
-                        -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
-                        -Dsonar.sourceEncoding=UTF-8 \
-                        -Dsonar.host.url=${SONAR_HOST_URL} \
-                        -Dsonar.token=${SONAR_TOKEN}
-                    echo "SonarQube analysis completed!"
-                '''
-            }
-        }
-    }
-}
-
-stage('Quality Gate') {
-    when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
-    steps {
-        script {
-            // The quality gate must also be inside the same withSonarQubeEnv context
-            // (or you can use a separate block; it will still work as long as the analysis was done inside it)
-            withSonarQubeEnv('SonarQube') {
-                echo "Waiting for SonarQube Quality Gate..."
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
+            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
+            steps {
+                script {
+                    // Replace 'sonar-server' with the exact name you configured in Jenkins → Configure System → SonarQube servers
+                    withSonarQubeEnv('sonar-server') {
+                        sh '''
+                            echo "Running SonarQube analysis..."
+                            sonar-scanner \
+                                -Dsonar.projectKey=${APP_NAME} \
+                                -Dsonar.projectName="${APP_NAME}" \
+                                -Dsonar.projectVersion=${APP_VERSION} \
+                                -Dsonar.sources=app \
+                                -Dsonar.tests=tests \
+                                -Dsonar.python.coverage.reportPaths=coverage.xml \
+                                -Dsonar.exclusions=**/venv/**,**/__pycache__/** \
+                                -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
+                                -Dsonar.sourceEncoding=UTF-8 \
+                                -Dsonar.host.url=${SONAR_HOST_URL} \
+                                -Dsonar.token=${SONAR_TOKEN}
+                            echo "SonarQube analysis completed!"
+                        '''
+                    }
                 }
             }
         }
-    }
-}
-        // **NEW: Trivy filesystem scan** – scans source code (optional but useful)
+
+        stage('Quality Gate') {
+            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
+            steps {
+                script {
+                    withSonarQubeEnv('sonar-server') {
+                        echo "Waiting for SonarQube Quality Gate..."
+                        timeout(time: 5, unit: 'MINUTES') {
+                            waitForQualityGate abortPipeline: false   // set to true if you want to fail on gate failure
+                        }
+                    }
+                }
+            }
+        }
+
+        // ========== NEW: Trivy filesystem scan ==========
         stage('Trivy File Scan') {
             steps {
                 sh '''
@@ -234,7 +234,7 @@ stage('Quality Gate') {
                             --format json \
                             --output trivy-reports/trivy-image-high-critical.json \
                             ${APP_NAME}:${APP_VERSION} || true
-                        # Also generate a full report (all severities) for completeness
+                        # Full report (all severities)
                         trivy image --format json --output trivy-reports/trivy-image-full.json \
                             ${APP_NAME}:${APP_VERSION} || true
                         echo "Trivy image scan completed"
@@ -275,12 +275,13 @@ stage('Quality Gate') {
             }
         }
 
+        // ========== NEW: DAST Scan with OWASP ZAP ==========
         stage('DAST Scan') {
             steps {
                 script {
-                    echo '🔍 Running OWASP ZAP baseline scan on the running Flask app...'
-                    
-                    // Start container again (in case previous test removed it)
+                    echo '🔍 Running OWASP ZAP baseline scan on the Flask app...'
+
+                    // Start a fresh container for ZAP (port 5000 must be free)
                     sh '''
                         docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
                         docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
@@ -300,7 +301,6 @@ stage('Quality Gate') {
 
                     echo "ZAP scan finished with exit code: ${zapExitCode}"
 
-                    // Parse JSON report to extract counts (if exists)
                     if (fileExists('zap_report.json')) {
                         try {
                             def zapJson = readJSON file: 'zap_report.json'
@@ -329,7 +329,6 @@ stage('Quality Gate') {
             }
             post {
                 always {
-                    // Stop and remove the container used for DAST
                     sh 'docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true'
                     publishHTML([
                         reportDir: '.',
@@ -368,24 +367,22 @@ stage('Quality Gate') {
     post {
         always {
             script {
-                // Collect all security reports into one directory for easy archiving
+                // Collect all security reports into one directory for archiving
                 sh '''
                     mkdir -p security-reports
-                    cp bandit-report.* security-reports/ 2>/dev/null || true
+                    cp bandit-report.html bandit-report.json security-reports/ 2>/dev/null || true
                     cp audit-report.json security-reports/ 2>/dev/null || true
                     cp pylint-report.txt security-reports/ 2>/dev/null || true
                     cp trivy-reports/* security-reports/ 2>/dev/null || true
                     cp zap_report.* security-reports/ 2>/dev/null || true
                 '''
                 archiveArtifacts artifacts: 'security-reports/**', allowEmptyArchive: true
-
-                // Clean up containers and old images
-                sh '''
-                    docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
-                    docker images ${APP_NAME} --format "{{.Repository}}:{{.Tag}}" | tail -n +6 | xargs -r docker rmi || true
-                '''
-                cleanWs()
             }
+            sh '''
+                docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
+                docker images ${APP_NAME} --format "{{.Repository}}:{{.Tag}}" | tail -n +6 | xargs -r docker rmi || true
+            '''
+            cleanWs()
         }
         success {
             echo "========================================="
@@ -395,6 +392,7 @@ stage('Quality Gate') {
             echo "SonarQube: ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
             echo "========================================="
 
+            // Email notification on success (requires Email Extension Plugin)
             script {
                 def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'GitHub User'
                 emailext(
@@ -422,12 +420,12 @@ stage('Quality Gate') {
                                     <li>✅ DAST: OWASP ZAP</li>
                                 </ul>
                                 <hr>
-                                <p>Artifacts attached. <a href="${env.BUILD_URL}">Full build log</a></p>
+                                <p>Attached are the security reports.</p>
                             </body>
                         </html>
                     """,
-                    to: 'mohamedaziz.aguir@gmail.com', 
-                    from: 'jmohamedaziz.aguir@gmail.com',
+                    to: 'mohamedaziz.aguir@gmail.com',
+                    from: 'mohamedaziz.aguir@gmail.com',
                     mimeType: 'text/html',
                     attachmentsPattern: 'security-reports/**'
                 )
@@ -439,7 +437,7 @@ stage('Quality Gate') {
             echo "Build: ${APP_NAME} #${BUILD_NUMBER}"
             echo "========================================="
 
-            // **NEW: Email notification on failure**
+            // Email notification on failure
             script {
                 def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'GitHub User'
                 emailext(
