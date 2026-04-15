@@ -14,8 +14,7 @@ pipeline {
         SONAR_HOST_URL   = "http://localhost:9000"
         SONAR_TOKEN      = credentials('sonar-token')
 
-        DOCKER_CREDS_USR = credentials('Docker-Hub').usr
-        DOCKER_CREDS_PSW = credentials('Docker-Hub').psw
+        DOCKER_CREDS     = credentials('Docker-Hub')
 
         PATH = "/opt/sonar-scanner/bin:${env.PATH}"
     }
@@ -34,7 +33,7 @@ pipeline {
 
                 script {
                     env.GIT_COMMIT_SHORT = sh(
-                        script: 'git rev-parse --short HEAD',
+                        script: "git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
 
@@ -98,6 +97,7 @@ pipeline {
 
             post {
                 always {
+
                     junit 'test-results.xml'
 
                     publishHTML([
@@ -113,6 +113,7 @@ pipeline {
         }
 
         stage('Security Scan') {
+
             parallel {
 
                 stage('Bandit') {
@@ -178,9 +179,9 @@ pipeline {
             steps {
                 sh '''
                 if command -v trivy > /dev/null 2>&1; then
-                  trivy image --severity HIGH,CRITICAL ${APP_NAME}:${APP_VERSION}
+                    trivy image --severity HIGH,CRITICAL ${APP_NAME}:${APP_VERSION}
                 else
-                  echo "Trivy not installed"
+                    echo "Trivy not installed"
                 fi
                 '''
             }
@@ -192,8 +193,8 @@ pipeline {
                 docker rm -f ${APP_NAME} || true
 
                 docker run -d -p 5000:5000 \
-                  --name ${APP_NAME} \
-                  ${APP_NAME}:${APP_VERSION}
+                    --name ${APP_NAME} \
+                    ${APP_NAME}:${APP_VERSION}
 
                 sleep 8
 
@@ -215,11 +216,13 @@ pipeline {
         }
 
         stage('Push Docker Image') {
+
             when {
                 branch 'main'
             }
 
             steps {
+
                 sh '''
                 echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
 
@@ -231,11 +234,13 @@ pipeline {
                 '''
             }
         }
+
     }
 
     post {
 
         always {
+
             script {
                 sh '''
                 docker rm -f ${APP_NAME} || true
