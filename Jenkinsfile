@@ -13,7 +13,7 @@ pipeline {
         SONAR_TOKEN      = credentials('sonar-token')
         DOCKER_CREDS     = credentials('Docker-Hub')
 
-        // Add sonar-scanner to PATH
+        // Add sonar-scanner to PATH so Jenkins can find it
         PATH             = "/opt/sonar-scanner/bin:${env.PATH}"
     }
 
@@ -142,8 +142,8 @@ pipeline {
             }
         }
 
-        // ========== NEW: SonarQube Analysis + Quality Gate (fixed) ==========
-        stage('SonarQube Analysis') {
+        // ========== SonarQube Analysis + Quality Gate (server name: sonarqube) ==========
+        stage('SonarQube Analysis & Gate') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
                 script {
@@ -162,28 +162,19 @@ pipeline {
                                 -Dsonar.sourceEncoding=UTF-8 \
                                 -Dsonar.host.url=${SONAR_HOST_URL} \
                                 -Dsonar.token=${SONAR_TOKEN}
-                            echo "SonarQube analysis completed!"
+                            echo "SonarQube analysis completed, waiting for quality gate..."
                         '''
-                    }
-                }
-            }
-        }
 
-        stage('Quality Gate') {
-            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
-            steps {
-                script {
-                    withSonarQubeEnv('sonarqube') {
-                        echo "Waiting for SonarQube Quality Gate..."
                         timeout(time: 5, unit: 'MINUTES') {
-                            waitForQualityGate abortPipeline: false   // set to true if you want to fail on gate failure
+                            waitForQualityGate abortPipeline: false
                         }
+                        echo "Quality Gate check finished."
                     }
                 }
             }
         }
 
-        // ========== NEW: Trivy filesystem scan ==========
+        // ========== Trivy filesystem scan ==========
         stage('Trivy File Scan') {
             steps {
                 sh '''
@@ -233,7 +224,6 @@ pipeline {
                             --format json \
                             --output trivy-reports/trivy-image-high-critical.json \
                             ${APP_NAME}:${APP_VERSION} || true
-                        # Full report (all severities)
                         trivy image --format json --output trivy-reports/trivy-image-full.json \
                             ${APP_NAME}:${APP_VERSION} || true
                         echo "Trivy image scan completed"
@@ -274,13 +264,12 @@ pipeline {
             }
         }
 
-        // ========== NEW: DAST Scan with OWASP ZAP ==========
+        // ========== DAST Scan with OWASP ZAP ==========
         stage('DAST Scan') {
             steps {
                 script {
                     echo '🔍 Running OWASP ZAP baseline scan on the Flask app...'
 
-                    // Start a fresh container for ZAP (port 5000 must be free)
                     sh '''
                         docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
                         docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
@@ -366,7 +355,6 @@ pipeline {
     post {
         always {
             script {
-                // Collect all security reports into one directory for archiving
                 sh '''
                     mkdir -p security-reports
                     cp bandit-report.html bandit-report.json security-reports/ 2>/dev/null || true
@@ -391,7 +379,6 @@ pipeline {
             echo "SonarQube: ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
             echo "========================================="
 
-            // Email notification on success (requires Email Extension Plugin)
             script {
                 def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'GitHub User'
                 emailext(
@@ -436,7 +423,6 @@ pipeline {
             echo "Build: ${APP_NAME} #${BUILD_NUMBER}"
             echo "========================================="
 
-            // Email notification on failure
             script {
                 def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'GitHub User'
                 emailext(
