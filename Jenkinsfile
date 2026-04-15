@@ -9,7 +9,7 @@ pipeline {
         DOCKER_IMAGE     = "${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${APP_NAME}"
         PYTHONPATH       = "${env.WORKSPACE}"
 
-        SONAR_HOST_URL   = "http://localhost:9000"
+        _HOST_URL   = "http://localhost:9000"
         SONAR_TOKEN      = credentials('sonar-token')
         DOCKER_CREDS     = credentials('Docker-Hub')
 
@@ -143,8 +143,11 @@ pipeline {
         }
 
         stage('SonarQube Analysis') {
-            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
-            steps {
+    when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
+    steps {
+        script {
+            // Wrap the analysis inside withSonarQubeEnv
+            withSonarQubeEnv('SonarQube') {   // 'SonarQube' is the server name configured in Jenkins
                 sh '''
                     echo "Running SonarQube analysis..."
                     sonar-scanner \
@@ -163,20 +166,24 @@ pipeline {
                 '''
             }
         }
+    }
+}
 
-        // **NEW: Quality Gate** – waits for SonarQube to evaluate the scan
-        stage('Quality Gate') {
-            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
-            steps {
-                script {
-                    echo "Waiting for SonarQube Quality Gate..."
-                    timeout(time: 5, unit: 'MINUTES') {
-                        waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
-                    }
+stage('Quality Gate') {
+    when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
+    steps {
+        script {
+            // The quality gate must also be inside the same withSonarQubeEnv context
+            // (or you can use a separate block; it will still work as long as the analysis was done inside it)
+            withSonarQubeEnv('SonarQube') {
+                echo "Waiting for SonarQube Quality Gate..."
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
                 }
             }
         }
-
+    }
+}
         // **NEW: Trivy filesystem scan** – scans source code (optional but useful)
         stage('Trivy File Scan') {
             steps {
