@@ -30,10 +30,7 @@ pipeline {
                 checkout scm
                 echo "Building ${APP_NAME} - Version: ${APP_VERSION} - Build #${BUILD_NUMBER}"
                 script {
-                    def gitCommit = sh(
-                        script: 'git rev-parse --short HEAD 2>/dev/null || echo "unknown"',
-                        returnStdout: true
-                    ).trim()
+                    def gitCommit = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo "unknown"', returnStdout: true).trim()
                     env.GIT_COMMIT_SHORT = gitCommit
                     echo "Git Commit: ${env.GIT_COMMIT_SHORT}"
                 }
@@ -55,25 +52,15 @@ pipeline {
             parallel {
                 stage('Flake8') {
                     steps {
-                        sh '''
-                            . venv/bin/activate
-                            flake8 app/ --max-line-length=100 --statistics --count || true
-                        '''
+                        sh '. venv/bin/activate && flake8 app/ --max-line-length=100 --statistics --count || true'
                     }
                 }
                 stage('Pylint') {
                     steps {
-                        sh '''
-                            . venv/bin/activate
-                            pylint app/ --fail-under=6.0 --exit-zero \
-                                --output-format=parseable > pylint-report.txt || true
-                        '''
+                        sh '. venv/bin/activate && pylint app/ --fail-under=6.0 --exit-zero --output-format=parseable > pylint-report.txt || true'
                     }
                     post {
-                        always {
-                            archiveArtifacts artifacts: 'pylint-report.txt',
-                                             allowEmptyArchive: true
-                        }
+                        always { archiveArtifacts artifacts: 'pylint-report.txt', allowEmptyArchive: true }
                     }
                 }
             }
@@ -95,12 +82,12 @@ pipeline {
                 always {
                     junit testResults: 'test-results.xml', allowEmptyResults: true
                     publishHTML([
-                        reportDir              : 'htmlcov',
-                        reportFiles            : 'index.html',
-                        reportName             : 'Coverage Report',
-                        allowMissing           : true,
-                        keepAll                : true,
-                        alwaysLinkToLastBuild  : false
+                        reportDir: 'htmlcov',
+                        reportFiles: 'index.html',
+                        reportName: 'Coverage Report',
+                        allowMissing: true,
+                        keepAll: true,
+                        alwaysLinkToLastBuild: false
                     ])
                 }
             }
@@ -113,21 +100,20 @@ pipeline {
                         sh '''
                             . venv/bin/activate
                             bandit -r app/ -f json -o bandit-report.json || true
-                            bandit -r app/ -f html -o bandit-report.html  || true
+                            bandit -r app/ -f html -o bandit-report.html || true
                         '''
                     }
                     post {
                         always {
                             publishHTML([
-                                reportDir              : '.',
-                                reportFiles            : 'bandit-report.html',
-                                reportName             : 'Bandit Security Report',
-                                allowMissing           : true,
-                                keepAll                : true,
-                                alwaysLinkToLastBuild  : false
+                                reportDir: '.',
+                                reportFiles: 'bandit-report.html',
+                                reportName: 'Bandit Security Report',
+                                allowMissing: true,
+                                keepAll: true,
+                                alwaysLinkToLastBuild: false
                             ])
-                            archiveArtifacts artifacts: 'bandit-report.json',
-                                             allowEmptyArchive: true
+                            archiveArtifacts artifacts: 'bandit-report.json', allowEmptyArchive: true
                         }
                     }
                 }
@@ -135,30 +121,23 @@ pipeline {
                     steps {
                         sh '''
                             . venv/bin/activate
-                            pip-audit --requirement requirements.txt \
-                                --format json --output audit-report.json || true
-                            pip-audit --requirement requirements.txt \
-                                --format columns || true
+                            pip-audit --requirement requirements.txt --format json --output audit-report.json || true
+                            pip-audit --requirement requirements.txt --format columns || true
                         '''
                     }
                     post {
-                        always {
-                            archiveArtifacts artifacts: 'audit-report.json',
-                                             allowEmptyArchive: true
-                        }
+                        always { archiveArtifacts artifacts: 'audit-report.json', allowEmptyArchive: true }
                     }
                 }
             }
         }
 
-        // ========== SonarQube Analysis ==========
         stage('SonarQube Analysis') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
                 script {
                     withSonarQubeEnv('sonarqube') {
                         sh '''
-                            echo "Running SonarQube analysis..."
                             sonar-scanner \
                                 -Dsonar.projectKey=${APP_NAME} \
                                 -Dsonar.projectName="${APP_NAME}" \
@@ -170,20 +149,10 @@ pipeline {
                                 -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
                                 -Dsonar.sourceEncoding=UTF-8 \
                                 -Dsonar.token=${SONAR_TOKEN}
-                            echo "Scanner finished."
                         '''
 
-                        def taskId = sh(
-                            script: '''
-                                grep -m1 "^ceTaskId=" .scannerwork/report-task.txt 2>/dev/null | cut -d= -f2 || echo ""
-                            ''',
-                            returnStdout: true
-                        ).trim()
-
-                        if (!taskId) {
-                            error "Failed to retrieve SonarQube CE task ID. Analysis may have failed."
-                        }
-
+                        def taskId = sh(script: 'grep -m1 "^ceTaskId=" .scannerwork/report-task.txt 2>/dev/null | cut -d= -f2 || echo ""', returnStdout: true).trim()
+                        if (!taskId) error "Failed to retrieve SonarQube CE task ID."
                         echo "SonarQube CE task ID: ${taskId}"
                         writeFile file: 'sonar-task-id.txt', text: taskId
                         stash name: 'sonar-task-id', includes: 'sonar-task-id.txt'
@@ -192,7 +161,6 @@ pipeline {
             }
         }
 
-        // ========== Quality Gate ==========
         stage('Quality Gate') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
@@ -201,51 +169,25 @@ pipeline {
                     def taskId = readFile('sonar-task-id.txt').trim()
                     echo "Waiting for quality gate for task: ${taskId}"
 
-                    def maxAttempts = 120
+                    def maxAttempts = 20
                     def taskSuccess = false
                     for (int i = 0; i < maxAttempts; i++) {
-                        def status = sh(
-                            script: """
-                                curl -s -u ${SONAR_TOKEN}: \
-                                    "${SONAR_HOST_URL}/api/ce/task?id=${taskId}" \
-                                | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4
-                            """,
-                            returnStdout: true
-                        ).trim()
-
+                        def status = sh(script: "curl -s -u ${SONAR_TOKEN}: \"${SONAR_HOST_URL}/api/ce/task?id=${taskId}\" | grep -o '\"status\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4", returnStdout: true).trim()
                         echo "CE task status (${i+1}/${maxAttempts}): ${status}"
 
                         if (status == 'SUCCESS') {
                             taskSuccess = true
                             break
                         } else if (status == 'FAILED' || status == 'CANCELLED') {
-                            error "SonarQube analysis task ${status}. Check server logs."
+                            error "SonarQube analysis task ${status}."
                         }
-                        sleep(time: 5, unit: 'SECONDS')
+                        sleep 5
                     }
+                    if (!taskSuccess) error "Timed out waiting for SonarQube analysis (10 minutes)."
 
-                    if (!taskSuccess) {
-                        error "Timed out waiting for SonarQube analysis (10 minutes)."
-                    }
-
-                    def gateStatus = sh(
-                        script: """
-                            curl -s -u ${SONAR_TOKEN}: \
-                                "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${APP_NAME}" \
-                            | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4
-                        """,
-                        returnStdout: true
-                    ).trim()
-
+                    def gateStatus = sh(script: "curl -s -u ${SONAR_TOKEN}: \"${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${APP_NAME}\" | grep -o '\"status\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4", returnStdout: true).trim()
                     echo "Quality Gate status: ${gateStatus}"
-
-                    if (gateStatus == 'OK') {
-                        echo "✅ Quality Gate PASSED."
-                    } else if (gateStatus == 'ERROR') {
-                        error "❌ Quality Gate FAILED. Check ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
-                    } else {
-                        echo "⚠️ Quality Gate status unknown (${gateStatus}) — proceeding anyway."
-                    }
+                    if (gateStatus != 'OK') error "Quality Gate FAILED. Check ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
                 }
             }
         }
@@ -255,44 +197,26 @@ pipeline {
                 sh '''
                     mkdir -p trivy-reports
                     if command -v trivy > /dev/null 2>&1; then
-                        echo "Running Trivy filesystem scan..."
-                        trivy fs . \
-                            --format json \
-                            --output trivy-reports/trivy-fs.json \
-                            --skip-dirs venv \
-                            --skip-dirs .git \
-                            || true
-                        trivy fs . \
-                            --format table \
-                            --output trivy-reports/trivy-fs.txt \
-                            --skip-dirs venv \
-                            --skip-dirs .git \
-                            || true
-                        echo "Trivy filesystem scan completed."
+                        trivy fs . --format json --output trivy-reports/trivy-fs.json --skip-dirs venv --skip-dirs .git || true
+                        trivy fs . --format table --output trivy-reports/trivy-fs.txt --skip-dirs venv --skip-dirs .git || true
                     else
-                        echo "Trivy not installed — skipping filesystem scan."
+                        echo "Trivy not installed – skipping filesystem scan"
                     fi
                 '''
             }
             post {
-                always {
-                    archiveArtifacts artifacts: 'trivy-reports/trivy-fs.*',
-                                     allowEmptyArchive: true
-                }
+                always { archiveArtifacts artifacts: 'trivy-reports/trivy-fs.*', allowEmptyArchive: true }
             }
         }
 
         stage('Docker Build') {
             steps {
                 sh '''
-                    echo "Building Docker image..."
                     docker build -t ${APP_NAME}:${APP_VERSION} -f docker/Dockerfile .
                     docker tag ${APP_NAME}:${APP_VERSION} ${APP_NAME}:latest
                     docker tag ${APP_NAME}:${APP_VERSION} ${DOCKER_IMAGE}:${APP_VERSION}
                     docker tag ${APP_NAME}:${APP_VERSION} ${DOCKER_IMAGE}:latest
                     docker tag ${APP_NAME}:${APP_VERSION} ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
-                    echo "Images created:"
-                    docker images | grep ${APP_NAME}
                 '''
             }
         }
@@ -302,29 +226,16 @@ pipeline {
                 sh '''
                     mkdir -p trivy-reports
                     if command -v trivy > /dev/null 2>&1; then
-                        echo "Scanning Docker image with Trivy..."
-                        trivy image --severity HIGH,CRITICAL \
-                            --format table \
-                            ${APP_NAME}:${APP_VERSION} || true
-                        trivy image --severity HIGH,CRITICAL \
-                            --format json \
-                            --output trivy-reports/trivy-image-high-critical.json \
-                            ${APP_NAME}:${APP_VERSION} || true
-                        trivy image \
-                            --format json \
-                            --output trivy-reports/trivy-image-full.json \
-                            ${APP_NAME}:${APP_VERSION} || true
-                        echo "Trivy image scan completed."
+                        trivy image --severity HIGH,CRITICAL --format table ${APP_NAME}:${APP_VERSION} || true
+                        trivy image --severity HIGH,CRITICAL --format json --output trivy-reports/trivy-image-high-critical.json ${APP_NAME}:${APP_VERSION} || true
+                        trivy image --format json --output trivy-reports/trivy-image-full.json ${APP_NAME}:${APP_VERSION} || true
                     else
-                        echo "Trivy not installed — skipping image scan."
+                        echo "Trivy not installed – skipping image scan"
                     fi
                 '''
             }
             post {
-                always {
-                    archiveArtifacts artifacts: 'trivy-reports/*',
-                                     allowEmptyArchive: true
-                }
+                always { archiveArtifacts artifacts: 'trivy-reports/*', allowEmptyArchive: true }
             }
         }
 
@@ -332,29 +243,20 @@ pipeline {
             steps {
                 sh '''
                     docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
-                    echo "Starting container for smoke test..."
                     docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
                     for i in $(seq 1 12); do
-                        if curl -sf http://localhost:5000/health > /dev/null 2>&1; then
-                            echo "App is up (attempt ${i})"
-                            break
-                        fi
-                        echo "Waiting for app... (${i}/12)"
-                        sleep 3
+                        curl -sf http://localhost:5000/health > /dev/null && echo "App is up (attempt ${i})" && break
+                        echo "Waiting for app... (${i}/12)"; sleep 3
                     done
-                    echo "Testing endpoints..."
                     curl -f http://localhost:5000/health
                     curl -f http://localhost:5000/
                     curl -f http://localhost:5000/metrics
-                    echo "All container smoke tests passed!"
                 '''
             }
             post {
                 always {
-                    sh '''
-                        docker logs ${APP_NAME} 2>/dev/null || true
-                        docker rm -f ${APP_NAME} 2>/dev/null || true
-                    '''
+                    sh 'docker logs ${APP_NAME} 2>/dev/null || true'
+                    sh 'docker rm -f ${APP_NAME} 2>/dev/null || true'
                 }
             }
         }
@@ -362,87 +264,56 @@ pipeline {
         stage('DAST Scan') {
             steps {
                 script {
-                    echo "Starting app for DAST scan..."
                     sh '''
                         docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
                         docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
                         for i in $(seq 1 12); do
-                            curl -sf http://localhost:5000/health > /dev/null 2>&1 \
-                                && echo "App ready (${i})" && break
-                            echo "Waiting for app... (${i}/12)"
-                            sleep 3
+                            curl -sf http://localhost:5000/health > /dev/null && echo "App ready (${i})" && break
+                            echo "Waiting for app... (${i}/12)"; sleep 3
                         done
                     '''
 
-                    echo "Running OWASP ZAP baseline scan..."
-                    def zapExitCode = sh(
-                        script: '''
-                            docker run --rm --user root --network host \
-                                -v $(pwd):/zap/wrk:rw \
-                                -t zaproxy/zap-stable zap-baseline.py \
-                                -t http://localhost:5000 \
-                                -r zap_report.html \
-                                -J zap_report.json \
-                                || true
-                        ''',
-                        returnStatus: true
-                    )
+                    def zapExitCode = sh(script: '''
+                        docker run --rm --user root --network host \
+                            -v $(pwd):/zap/wrk:rw \
+                            -t zaproxy/zap-stable zap-baseline.py \
+                            -t http://localhost:5000 \
+                            -r zap_report.html -J zap_report.json || true
+                    ''', returnStatus: true)
                     echo "ZAP scan finished with exit code: ${zapExitCode}"
 
                     if (fileExists('zap_report.json')) {
-                        def highCount = sh(
-                            script: 'grep -o \'"risk":"High"\' zap_report.json | wc -l || echo 0',
-                            returnStdout: true
-                        ).trim()
-                        def mediumCount = sh(
-                            script: 'grep -o \'"risk":"Medium"\' zap_report.json | wc -l || echo 0',
-                            returnStdout: true
-                        ).trim()
-                        def lowCount = sh(
-                            script: 'grep -o \'"risk":"Low"\' zap_report.json | wc -l || echo 0',
-                            returnStdout: true
-                        ).trim()
+                        def highCount = sh(script: 'grep -o \'"risk":"High"\' zap_report.json | wc -l || echo 0', returnStdout: true).trim()
+                        def mediumCount = sh(script: 'grep -o \'"risk":"Medium"\' zap_report.json | wc -l || echo 0', returnStdout: true).trim()
+                        def lowCount = sh(script: 'grep -o \'"risk":"Low"\' zap_report.json | wc -l || echo 0', returnStdout: true).trim()
                         echo "High: ${highCount} | Medium: ${mediumCount} | Low: ${lowCount}"
-                    } else {
-                        echo "ZAP report not found — continuing."
                     }
-                    echo "DAST scan completed."
                 }
             }
             post {
                 always {
-                    sh '''
-                        docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
-                    '''
+                    sh 'docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true'
                     publishHTML([
-                        reportDir              : '.',
-                        reportFiles            : 'zap_report.html',
-                        reportName             : 'OWASP ZAP Report',
-                        allowMissing           : true,
-                        keepAll                : true,
-                        alwaysLinkToLastBuild  : false
+                        reportDir: '.',
+                        reportFiles: 'zap_report.html',
+                        reportName: 'OWASP ZAP Report',
+                        allowMissing: true,
+                        keepAll: true,
+                        alwaysLinkToLastBuild: false
                     ])
-                    archiveArtifacts artifacts: 'zap_report.html, zap_report.json',
-                                     allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'zap_report.html, zap_report.json', allowEmptyArchive: true
                 }
             }
         }
 
         stage('Push to Docker Hub') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'master'
-                }
-            }
+            when { anyOf { branch 'main'; branch 'master' } }
             steps {
                 sh '''
-                    echo "Logging into Docker Hub..."
                     echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
                     docker push ${DOCKER_IMAGE}:${APP_VERSION}
                     docker push ${DOCKER_IMAGE}:latest
                     docker push ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
-                    echo "Images pushed successfully."
                     docker logout
                 '''
             }
@@ -450,52 +321,43 @@ pipeline {
     }
 
     post {
-        // Collect reports and archive them (before any cleanup)
         always {
             script {
                 sh '''
                     mkdir -p security-reports
-                    for f in bandit-report.html bandit-report.json \
-                              audit-report.json pylint-report.txt \
-                              zap_report.html zap_report.json; do
+                    for f in bandit-report.html bandit-report.json audit-report.json pylint-report.txt zap_report.html zap_report.json; do
                         [ -f "$f" ] && cp "$f" security-reports/ || true
                     done
                     [ -d trivy-reports ] && cp trivy-reports/* security-reports/ 2>/dev/null || true
                 '''
-                archiveArtifacts artifacts: 'security-reports/**',
-                                 allowEmptyArchive: true
+                archiveArtifacts artifacts: 'security-reports/**', allowEmptyArchive: true
             }
         }
-
         success {
-            // Send email with attachments (workspace still exists)
             script {
-                def buildUser = currentBuild
-                    .getBuildCauses('hudson.model.Cause$UserIdCause')[0]
-                    ?.userId ?: 'GitHub Push'
-
+                def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'GitHub Push'
                 emailext(
                     subject: "✅ SUCCESS: ${APP_NAME} #${BUILD_NUMBER}",
                     body: """
                         <html><body style="font-family:Arial,sans-serif;">
                         <h2>DevSecOps Pipeline — SUCCESS</h2><hr>
                         <table border="1" cellpadding="8">
-                          <tr><td><b>Job</b></td><td>${env.JOB_NAME}</td></tr>
-                          <tr><td><b>Build</b></td><td>${env.BUILD_NUMBER}</td></tr>
-                          <tr><td><b>Status</b></td><td style="color:green"><b>SUCCESS</b></td></tr>
-                          <tr><td><b>Triggered by</b></td><td>${buildUser}</td></tr>
-                          <tr><td><b>Commit</b></td><td>${env.GIT_COMMIT_SHORT}</td></tr>
-                          <tr><td><b>URL</b></td><td><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
+                            <tr><td><b>Job</b></td><td>${env.JOB_NAME}</td></tr>
+                            <tr><td><b>Build</b></td><td>${env.BUILD_NUMBER}</td></tr>
+                            <tr><td><b>Status</b></td><td style="color:green"><b>SUCCESS</b></td></tr>
+                            <tr><td><b>Triggered by</b></td><td>${buildUser}</td></tr>
+                            <tr><td><b>Commit</b></td><td>${env.GIT_COMMIT_SHORT}</td></tr>
+                            <tr><td><b>URL</b></td><td><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
                         </table><hr>
-                        <h3>Security stages completed</h3>
+                        <h3>Security Scans</h3>
                         <ul>
-                          <li>SAST — SonarQube + Quality Gate</li>
-                          <li>SAST — Bandit (Python)</li>
-                          <li>SCA  — pip-audit (dependencies)</li>
-                          <li>SCAN — Trivy (filesystem + image)</li>
-                          <li>DAST — OWASP ZAP baseline</li>
+                            <li>SAST: SonarQube + Quality Gate</li>
+                            <li>Bandit (Python)</li>
+                            <li>pip-audit (dependencies)</li>
+                            <li>Trivy (filesystem + image)</li>
+                            <li>DAST: OWASP ZAP</li>
                         </ul>
-                        <p>Security reports are attached.</p>
+                        <p>Attached: all security reports.</p>
                         </body></html>
                     """,
                     to: 'mohamedaziz.aguir@gmail.com',
@@ -504,54 +366,26 @@ pipeline {
                     attachmentsPattern: 'security-reports/**'
                 )
             }
-
-            // Cleanup after email (workspace is still present)
             sh '''
                 docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
-                # Remove old images (keep last 5) – robust version
-                docker images --filter "reference=${APP_NAME}" \
-                    --format "{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}" \
-                    | sort -r \
-                    | tail -n +6 \
-                    | awk -F'\t' '{print $2}' \
-                    | xargs -r docker rmi 2>/dev/null || true
+                docker images --filter "reference=${APP_NAME}" --format "{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}" | sort -r | tail -n +6 | awk -F'\t' '{print $2}' | xargs -r docker rmi 2>/dev/null || true
             '''
             cleanWs()
         }
-
         failure {
             script {
-                def buildUser = currentBuild
-                    .getBuildCauses('hudson.model.Cause$UserIdCause')[0]
-                    ?.userId ?: 'GitHub Push'
-
+                def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'GitHub Push'
                 emailext(
                     subject: "❌ FAILED: ${APP_NAME} #${BUILD_NUMBER}",
-                    body: """
-                        <html><body>
-                        <h2>Build Failed</h2>
-                        <p>
-                          Job: ${env.JOB_NAME}<br>
-                          Build: ${env.BUILD_NUMBER}<br>
-                          Triggered by: ${buildUser}<br>
-                          <a href="${env.BUILD_URL}console">Console output</a>
-                        </p>
-                        </body></html>
-                    """,
+                    body: "<html><body><h2>Build Failed</h2><p>Job: ${env.JOB_NAME}<br>Build: ${env.BUILD_NUMBER}<br>Triggered by: ${buildUser}<br><a href='${env.BUILD_URL}console'>Console output</a></p></body></html>",
                     to: 'mohamedaziz.aguir@gmail.com',
                     from: 'mohamedaziz.aguir@gmail.com',
                     mimeType: 'text/html'
                 )
             }
-
             sh '''
                 docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
-                docker images --filter "reference=${APP_NAME}" \
-                    --format "{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}" \
-                    | sort -r \
-                    | tail -n +6 \
-                    | awk -F'\t' '{print $2}' \
-                    | xargs -r docker rmi 2>/dev/null || true
+                docker images --filter "reference=${APP_NAME}" --format "{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}" | sort -r | tail -n +6 | awk -F'\t' '{print $2}' | xargs -r docker rmi 2>/dev/null || true
             '''
             cleanWs()
         }
