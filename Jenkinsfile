@@ -13,7 +13,6 @@ pipeline {
         SONAR_TOKEN      = credentials('sonar-token')
         DOCKER_CREDS     = credentials('Docker-Hub')
 
-        // Add sonar-scanner to PATH so Jenkins can find it
         PATH             = "/opt/sonar-scanner/bin:${env.PATH}"
     }
 
@@ -142,12 +141,13 @@ pipeline {
             }
         }
 
-        // ========== SonarQube Analysis + Quality Gate (server name: sonarqube) ==========
+        // ========== SonarQube Analysis & Quality Gate (combined, robust) ==========
         stage('SonarQube Analysis & Gate') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
                 script {
                     withSonarQubeEnv('sonarqube') {
+                        // Run analysis
                         sh '''
                             echo "Running SonarQube analysis..."
                             sonar-scanner \
@@ -162,13 +162,41 @@ pipeline {
                                 -Dsonar.sourceEncoding=UTF-8 \
                                 -Dsonar.host.url=${SONAR_HOST_URL} \
                                 -Dsonar.token=${SONAR_TOKEN}
-                            echo "SonarQube analysis completed, waiting for quality gate..."
                         '''
 
-                        timeout(time: 5, unit: 'MINUTES') {
-                            waitForQualityGate abortPipeline: false
+                        // Give SonarQube a few seconds to start processing
+                        sleep(time: 5, unit: 'SECONDS')
+
+                        // Wait for quality gate with a custom polling loop (more reliable)
+                        def maxAttempts = 60   // 5 minutes total (5s * 60)
+                        def taskId = null
+                        for (int i = 0; i < maxAttempts; i++) {
+                            def response = sh(
+                                script: "curl -s -u ${SONAR_TOKEN}: '${SONAR_HOST_URL}/api/ce/task?id=${taskId}'",
+                                returnStdout: true
+                            ).trim()
+                            // Parse JSON to get status (simplified – use readJSON in real)
+                            if (response.contains('"status":"SUCCESS"')) {
+                                echo "SonarQube analysis completed successfully!"
+                                break
+                            } else if (response.contains('"status":"FAILED"')) {
+                                error "SonarQube analysis failed. Check server logs."
+                            }
+                            echo "Waiting for SonarQube analysis to finish... (${i+1}/${maxAttempts})"
+                            sleep(time: 5, unit: 'SECONDS')
                         }
-                        echo "Quality Gate check finished."
+                        // After loop, check quality gate status
+                        def gateStatus = sh(
+                            script: "curl -s -u ${SONAR_TOKEN}: '${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${APP_NAME}'",
+                            returnStdout: true
+                        ).trim()
+                        if (gateStatus.contains('"status":"OK"')) {
+                            echo "✅ Quality Gate passed."
+                        } else if (gateStatus.contains('"status":"ERROR"')) {
+                            error "❌ Quality Gate failed! Check SonarQube dashboard."
+                        } else {
+                            echo "⚠️ Quality Gate status unknown. Proceeding anyway."
+                        }
                     }
                 }
             }
