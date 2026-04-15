@@ -13,7 +13,6 @@ pipeline {
         SONAR_TOKEN      = credentials('sonar-token')
         DOCKER_CREDS     = credentials('Docker-Hub')
 
-        // Path to local sonar-scanner (adjust if needed)
         PATH             = "/opt/sonar-scanner/bin:${env.PATH}"
     }
 
@@ -152,7 +151,7 @@ pipeline {
             }
         }
 
-        // ========== SonarQube Analysis (extract task ID) ==========
+        // ========== SonarQube Analysis ==========
         stage('SonarQube Analysis') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
@@ -174,7 +173,6 @@ pipeline {
                             echo "Scanner finished."
                         '''
 
-                        // Extract CE task ID
                         def taskId = sh(
                             script: '''
                                 grep -m1 "^ceTaskId=" .scannerwork/report-task.txt 2>/dev/null | cut -d= -f2 || echo ""
@@ -194,7 +192,7 @@ pipeline {
             }
         }
 
-        // ========== Quality Gate (custom polling using the task ID) ==========
+        // ========== Quality Gate ==========
         stage('Quality Gate') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
@@ -203,11 +201,9 @@ pipeline {
                     def taskId = readFile('sonar-task-id.txt').trim()
                     echo "Waiting for quality gate for task: ${taskId}"
 
-                    // Poll CE task status every 5 seconds for up to 10 minutes
-                    def maxAttempts = 120  // 120 * 5s = 600s = 10 minutes
+                    def maxAttempts = 120
                     def taskSuccess = false
                     for (int i = 0; i < maxAttempts; i++) {
-                        // Use basic authentication (SONAR_TOKEN: empty password)
                         def status = sh(
                             script: """
                                 curl -s -u ${SONAR_TOKEN}: \
@@ -232,7 +228,6 @@ pipeline {
                         error "Timed out waiting for SonarQube analysis (10 minutes)."
                     }
 
-                    // Now check the quality gate status
                     def gateStatus = sh(
                         script: """
                             curl -s -u ${SONAR_TOKEN}: \
@@ -455,6 +450,7 @@ pipeline {
     }
 
     post {
+        // Collect reports and archive them (before any cleanup)
         always {
             script {
                 sh '''
@@ -469,27 +465,10 @@ pipeline {
                 archiveArtifacts artifacts: 'security-reports/**',
                                  allowEmptyArchive: true
             }
-
-            sh '''
-                docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
-                docker images --filter "reference=${APP_NAME}" \
-                    --format "{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}" \
-                    | sort -r \
-                    | tail -n +6 \
-                    | awk "{print \$2}" \
-                    | xargs -r docker rmi || true
-            '''
-            cleanWs()
         }
 
         success {
-            echo "================================================="
-            echo "PIPELINE COMPLETED SUCCESSFULLY"
-            echo "Build  : ${APP_NAME}:${APP_VERSION}"
-            echo "Commit : ${env.GIT_COMMIT_SHORT}"
-            echo "Sonar  : ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
-            echo "================================================="
-
+            // Send email with attachments (workspace still exists)
             script {
                 def buildUser = currentBuild
                     .getBuildCauses('hudson.model.Cause$UserIdCause')[0]
@@ -525,14 +504,22 @@ pipeline {
                     attachmentsPattern: 'security-reports/**'
                 )
             }
+
+            // Cleanup after email (workspace is still present)
+            sh '''
+                docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
+                # Remove old images (keep last 5) – robust version
+                docker images --filter "reference=${APP_NAME}" \
+                    --format "{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}" \
+                    | sort -r \
+                    | tail -n +6 \
+                    | awk -F'\t' '{print $2}' \
+                    | xargs -r docker rmi 2>/dev/null || true
+            '''
+            cleanWs()
         }
 
         failure {
-            echo "================================================="
-            echo "PIPELINE FAILED"
-            echo "Build  : ${APP_NAME} #${BUILD_NUMBER}"
-            echo "================================================="
-
             script {
                 def buildUser = currentBuild
                     .getBuildCauses('hudson.model.Cause$UserIdCause')[0]
@@ -556,6 +543,17 @@ pipeline {
                     mimeType: 'text/html'
                 )
             }
+
+            sh '''
+                docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
+                docker images --filter "reference=${APP_NAME}" \
+                    --format "{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}" \
+                    | sort -r \
+                    | tail -n +6 \
+                    | awk -F'\t' '{print $2}' \
+                    | xargs -r docker rmi 2>/dev/null || true
+            '''
+            cleanWs()
         }
     }
 }
