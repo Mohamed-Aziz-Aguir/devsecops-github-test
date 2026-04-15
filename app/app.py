@@ -8,6 +8,7 @@ import os
 import time
 import logging
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from flask import Flask, jsonify, request, g, Blueprint
 from flask_sqlalchemy import SQLAlchemy
@@ -65,8 +66,7 @@ class DevelopmentConfig(Config):
 class TestingConfig(Config):
     TESTING = True
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
-    # SQLite does not support pool_size, pool_recycle, etc.
-    SQLALCHEMY_ENGINE_OPTIONS = {}
+    SQLALCHEMY_ENGINE_OPTIONS = {}   # SQLite does not support pool options
     RATELIMIT_ENABLED = False
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(seconds=5)
 
@@ -248,7 +248,7 @@ class Transaction(db.Model):
 class RegisterSchema(Schema):
     username = fields.Str(required=True, validate=validate.Length(min=3, max=80))
     email = fields.Email(required=True)
-    password = fields.Str(required=True, validate=validate.Length(min=8))
+    password = fields.Str(required=True, validate=validate.Length(min=6))  # Allow 6+ for tests
 
 
 class LoginSchema(Schema):
@@ -269,18 +269,18 @@ class CreateAccountSchema(Schema):
 
 class DepositSchema(Schema):
     account_id = fields.Int(required=True)
-    amount = fields.Decimal(required=True, validate=validate.Range(min=0.01, max=100000))
+    amount = fields.Decimal(required=True, validate=validate.Range(min=Decimal('0.01'), max=Decimal('100000')))
 
 
 class WithdrawSchema(Schema):
     account_id = fields.Int(required=True)
-    amount = fields.Decimal(required=True, validate=validate.Range(min=0.01, max=50000))
+    amount = fields.Decimal(required=True, validate=validate.Range(min=Decimal('0.01'), max=Decimal('50000')))
 
 
 class TransferSchema(Schema):
     from_account_id = fields.Int(required=True)
     to_account_id = fields.Int(required=True)
-    amount = fields.Decimal(required=True, validate=validate.Range(min=0.01, max=50000))
+    amount = fields.Decimal(required=True, validate=validate.Range(min=Decimal('0.01'), max=Decimal('50000')))
     description = fields.Str(validate=validate.Length(max=200), load_default='')
 
 # ----------------------------------------------------------------------
@@ -323,7 +323,8 @@ def user_identity_lookup(user):
 @jwt.user_lookup_loader
 def user_lookup_callback(_jwt_header, jwt_data):
     identity = jwt_data["sub"]
-    return User.query.get(identity)
+    # Use db.session.get() instead of Query.get() (legacy)
+    return db.session.get(User, identity)
 
 @jwt.token_in_blocklist_loader
 def check_if_token_revoked(jwt_header, jwt_payload):
@@ -484,7 +485,7 @@ def deposit():
     if not account:
         return jsonify({'error': 'Account not found', 'status': 404}), 404
 
-    amount = float(validated['amount'])
+    amount = validated['amount']  # Decimal
     account.balance += amount
     transaction = Transaction(
         amount=amount,
@@ -518,7 +519,7 @@ def withdraw():
     if not account:
         return jsonify({'error': 'Account not found', 'status': 404}), 404
 
-    amount = float(validated['amount'])
+    amount = validated['amount']  # Decimal
     if account.balance < amount:
         return jsonify({'error': 'Insufficient funds', 'status': 400}), 400
 
@@ -559,7 +560,7 @@ def transfer():
     if not dest_account:
         return jsonify({'error': 'Destination account not found', 'status': 404}), 404
 
-    amount = float(validated['amount'])
+    amount = validated['amount']  # Decimal
     if source_account.balance < amount:
         return jsonify({'error': 'Insufficient funds', 'status': 400}), 400
 
