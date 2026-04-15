@@ -292,27 +292,27 @@ pipeline {
     }
 
     post {
-        always {
+    always {
+        script {
             sh '''
-                docker rm -f ${APP_NAME} || true
-                docker images ${APP_NAME} --format "{{.Repository}}:{{.Tag}}" | tail -n +6 | xargs -r docker rmi || true
+                docker rm -f secure-task-app || true
+                docker images secure-task-app --format "{{.Repository}}:{{.Tag}}" | tail -n +6 | xargs -r docker rmi || true
             '''
-            cleanWs()
         }
-        success {
-            echo "========================================="
-            echo "PIPELINE COMPLETED SUCCESSFULLY!"
-            echo "Build: ${APP_NAME}:${APP_VERSION}"
-            echo "Git Commit: ${env.GIT_COMMIT_SHORT}"
-            echo "SonarQube: ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
-            echo "========================================="
-        }
-        failure {
-            echo "========================================="
-            echo "PIPELINE FAILED - Check logs above"
-            echo "Build: ${APP_NAME} #${BUILD_NUMBER}"
-            echo "========================================="
-        }
+        cleanWs()
     }
+
+    success {
+        echo "========================================="
+        echo "PIPELINE COMPLETED SUCCESSFULLY!"
+        echo "========================================="
+    }
+
+    failure {
+        echo "========================================="
+        echo "PIPELINE FAILED - Check logs above"
+        echo "========================================="
+    }
+}
 }
 
