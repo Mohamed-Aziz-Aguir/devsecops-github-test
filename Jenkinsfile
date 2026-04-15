@@ -13,7 +13,7 @@ pipeline {
         SONAR_TOKEN      = credentials('sonar-token')
         DOCKER_CREDS     = credentials('Docker-Hub')
 
-        // Path to local sonar-scanner (adjust if different)
+        // Path to local sonar-scanner (adjust if needed)
         PATH             = "/opt/sonar-scanner/bin:${env.PATH}"
     }
 
@@ -152,34 +152,109 @@ pipeline {
             }
         }
 
-    stage('SonarQube Analysis & Quality Gate') {
-    when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
-    steps {
-        script {
-            withSonarQubeEnv('sonarqube') {
-                sh '''
-                    echo "Running SonarQube analysis..."
-                    sonar-scanner \
-                        -Dsonar.projectKey=${APP_NAME} \
-                        -Dsonar.projectName="${APP_NAME}" \
-                        -Dsonar.projectVersion=${APP_VERSION} \
-                        -Dsonar.sources=app \
-                        -Dsonar.tests=tests \
-                        -Dsonar.python.coverage.reportPaths=coverage.xml \
-                        -Dsonar.exclusions=**/venv/**,**/__pycache__/** \
-                        -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
-                        -Dsonar.sourceEncoding=UTF-8 \
-                        -Dsonar.token=${SONAR_TOKEN}
-                    echo "Scanner finished, waiting for quality gate..."
-                '''
-                timeout(time: 1, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: false
+        // ========== SonarQube Analysis (extract task ID) ==========
+        stage('SonarQube Analysis') {
+            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
+            steps {
+                script {
+                    withSonarQubeEnv('sonarqube') {
+                        sh '''
+                            echo "Running SonarQube analysis..."
+                            sonar-scanner \
+                                -Dsonar.projectKey=${APP_NAME} \
+                                -Dsonar.projectName="${APP_NAME}" \
+                                -Dsonar.projectVersion=${APP_VERSION} \
+                                -Dsonar.sources=app \
+                                -Dsonar.tests=tests \
+                                -Dsonar.python.coverage.reportPaths=coverage.xml \
+                                -Dsonar.exclusions=**/venv/**,**/__pycache__/** \
+                                -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
+                                -Dsonar.sourceEncoding=UTF-8 \
+                                -Dsonar.token=${SONAR_TOKEN}
+                            echo "Scanner finished."
+                        '''
+
+                        // Extract CE task ID
+                        def taskId = sh(
+                            script: '''
+                                grep -m1 "^ceTaskId=" .scannerwork/report-task.txt 2>/dev/null | cut -d= -f2 || echo ""
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+                        if (!taskId) {
+                            error "Failed to retrieve SonarQube CE task ID. Analysis may have failed."
+                        }
+
+                        echo "SonarQube CE task ID: ${taskId}"
+                        writeFile file: 'sonar-task-id.txt', text: taskId
+                        stash name: 'sonar-task-id', includes: 'sonar-task-id.txt'
+                    }
                 }
-                echo "Quality Gate check finished."
             }
         }
-    }
-}
+
+        // ========== Quality Gate (custom polling using the task ID) ==========
+        stage('Quality Gate') {
+            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
+            steps {
+                script {
+                    unstash 'sonar-task-id'
+                    def taskId = readFile('sonar-task-id.txt').trim()
+                    echo "Waiting for quality gate for task: ${taskId}"
+
+                    // Poll CE task status every 5 seconds for up to 10 minutes
+                    def maxAttempts = 120  // 120 * 5s = 600s = 10 minutes
+                    def taskSuccess = false
+                    for (int i = 0; i < maxAttempts; i++) {
+                        // Use basic authentication (SONAR_TOKEN: empty password)
+                        def status = sh(
+                            script: """
+                                curl -s -u ${SONAR_TOKEN}: \
+                                    "${SONAR_HOST_URL}/api/ce/task?id=${taskId}" \
+                                | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        echo "CE task status (${i+1}/${maxAttempts}): ${status}"
+
+                        if (status == 'SUCCESS') {
+                            taskSuccess = true
+                            break
+                        } else if (status == 'FAILED' || status == 'CANCELLED') {
+                            error "SonarQube analysis task ${status}. Check server logs."
+                        }
+                        sleep(time: 5, unit: 'SECONDS')
+                    }
+
+                    if (!taskSuccess) {
+                        error "Timed out waiting for SonarQube analysis (10 minutes)."
+                    }
+
+                    // Now check the quality gate status
+                    def gateStatus = sh(
+                        script: """
+                            curl -s -u ${SONAR_TOKEN}: \
+                                "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${APP_NAME}" \
+                            | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Quality Gate status: ${gateStatus}"
+
+                    if (gateStatus == 'OK') {
+                        echo "✅ Quality Gate PASSED."
+                    } else if (gateStatus == 'ERROR') {
+                        error "❌ Quality Gate FAILED. Check ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
+                    } else {
+                        echo "⚠️ Quality Gate status unknown (${gateStatus}) — proceeding anyway."
+                    }
+                }
+            }
+        }
+
         stage('Trivy File Scan') {
             steps {
                 sh '''
@@ -382,7 +457,6 @@ pipeline {
     post {
         always {
             script {
-                // Collect all security reports (BEFORE workspace cleanup)
                 sh '''
                     mkdir -p security-reports
                     for f in bandit-report.html bandit-report.json \
