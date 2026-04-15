@@ -420,7 +420,7 @@ pipeline {
                         </html>
                     """,
                     to: 'mohamedaziz.aguir@gmail.com', 
-                    from: 'jenkins@your-domain.com',
+                    from: 'jmohamedaziz.aguir@gmail.com',
                     mimeType: 'text/html',
                     attachmentsPattern: 'security-reports/**'
                 )
@@ -449,7 +449,7 @@ pipeline {
                         </html>
                     """,
                     to: 'mohamedaziz.aguir@gmail.com',
-                    from: 'jenkins@your-domain.com',
+                    from: 'mohamedaziz.aguir@gmail.com',
                     mimeType: 'text/html'
                 )
             }
