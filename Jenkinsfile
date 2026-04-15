@@ -147,8 +147,7 @@ pipeline {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
                 script {
-                    // Replace 'sonar-server' with the exact name you configured in Jenkins → Configure System → SonarQube servers
-                    withSonarQubeEnv('sonar-server') {
+                    withSonarQubeEnv('sonarqube') {
                         sh '''
                             echo "Running SonarQube analysis..."
                             sonar-scanner \
@@ -174,7 +173,7 @@ pipeline {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
                 script {
-                    withSonarQubeEnv('sonar-server') {
+                    withSonarQubeEnv('sonarqube') {
                         echo "Waiting for SonarQube Quality Gate..."
                         timeout(time: 5, unit: 'MINUTES') {
                             waitForQualityGate abortPipeline: false   // set to true if you want to fail on gate failure
