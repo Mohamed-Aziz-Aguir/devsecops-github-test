@@ -13,7 +13,7 @@ pipeline {
         SONAR_TOKEN      = credentials('sonar-token')
         DOCKER_CREDS     = credentials('Docker-Hub')
 
-        // Ensure sonar-scanner is in PATH (installed locally at /opt/sonar-scanner/bin)
+        // Path to local sonar-scanner (adjust if different)
         PATH             = "/opt/sonar-scanner/bin:${env.PATH}"
     }
 
@@ -152,12 +152,14 @@ pipeline {
             }
         }
 
-        // ========== FIXED: SonarQube Analysis + Quality Gate (native plugin) ==========
-        stage('SonarQube Analysis & Quality Gate') {
+        // ========================
+        // FIXED: SonarQube analysis (stage 1)
+        // ========================
+        stage('SonarQube Analysis') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
                 script {
-                    // 'sonarqube' must match the name of your SonarQube server in Jenkins configuration
+                    // Replace 'sonarqube' with the EXACT name of your SonarQube server in Jenkins config
                     withSonarQubeEnv('sonarqube') {
                         sh '''
                             echo "Running SonarQube analysis..."
@@ -172,13 +174,47 @@ pipeline {
                                 -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
                                 -Dsonar.sourceEncoding=UTF-8 \
                                 -Dsonar.token=${SONAR_TOKEN}
-                            echo "Scanner finished. Waiting for quality gate..."
+                            echo "Scanner finished."
                         '''
 
+                        // Extract the CE task ID from the scanner output file
+                        def taskId = sh(
+                            script: '''
+                                grep -m1 "^ceTaskId=" .scannerwork/report-task.txt 2>/dev/null | cut -d= -f2 || echo ""
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+                        if (!taskId) {
+                            error "Failed to retrieve SonarQube CE task ID. Analysis may have failed."
+                        }
+
+                        echo "SonarQube CE task ID: ${taskId}"
+                        // Stash the task ID for the next stage
+                        writeFile file: 'sonar-task-id.txt', text: taskId
+                        stash name: 'sonar-task-id', includes: 'sonar-task-id.txt'
+                    }
+                }
+            }
+        }
+
+        // ========================
+        // Quality Gate (stage 2)
+        // ========================
+        stage('Quality Gate') {
+            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
+            steps {
+                script {
+                    // Restore the task ID
+                    unstash 'sonar-task-id'
+                    def taskId = readFile('sonar-task-id.txt').trim()
+                    echo "Waiting for quality gate for task: ${taskId}"
+
+                    // Use the same SonarQube server name
+                    withSonarQubeEnv('sonarqube') {
                         timeout(time: 10, unit: 'MINUTES') {
-                            // abortPipeline: false → stage fails if quality gate fails (pipeline continues)
-                            // Set to true if you want the whole pipeline to stop immediately
-                            waitForQualityGate abortPipeline: false
+                            // Pass the taskId explicitly to waitForQualityGate
+                            waitForQualityGate taskId: taskId, abortPipeline: false
                         }
                         echo "Quality Gate check finished."
                     }
@@ -207,7 +243,6 @@ pipeline {
                         echo "Trivy filesystem scan completed."
                     else
                         echo "Trivy not installed — skipping filesystem scan."
-                        echo "Install: sudo apt-get install -y trivy"
                     fi
                 '''
             }
@@ -384,13 +419,12 @@ pipeline {
                 '''
             }
         }
-
-    } // stages
+    }
 
     post {
         always {
             script {
-                // Collect all security reports into one folder (BEFORE cleaning workspace)
+                // Collect all security reports (BEFORE workspace cleanup)
                 sh '''
                     mkdir -p security-reports
                     for f in bandit-report.html bandit-report.json \
@@ -404,7 +438,6 @@ pipeline {
                                  allowEmptyArchive: true
             }
 
-            // Prune old Docker images (keep last 5)
             sh '''
                 docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
                 docker images --filter "reference=${APP_NAME}" \
@@ -414,8 +447,6 @@ pipeline {
                     | awk "{print \$2}" \
                     | xargs -r docker rmi || true
             '''
-
-            // Finally, clean workspace
             cleanWs()
         }
 
@@ -440,12 +471,10 @@ pipeline {
                         <table border="1" cellpadding="8">
                           <tr><td><b>Job</b></td><td>${env.JOB_NAME}</td></tr>
                           <tr><td><b>Build</b></td><td>${env.BUILD_NUMBER}</td></tr>
-                          <tr><td><b>Status</b></td>
-                              <td style="color:green"><b>SUCCESS</b></td></tr>
+                          <tr><td><b>Status</b></td><td style="color:green"><b>SUCCESS</b></td></tr>
                           <tr><td><b>Triggered by</b></td><td>${buildUser}</td></tr>
                           <tr><td><b>Commit</b></td><td>${env.GIT_COMMIT_SHORT}</td></tr>
-                          <tr><td><b>URL</b></td>
-                              <td><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
+                          <tr><td><b>URL</b></td><td><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
                         </table><hr>
                         <h3>Security stages completed</h3>
                         <ul>
