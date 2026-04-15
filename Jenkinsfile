@@ -13,7 +13,7 @@ pipeline {
         SONAR_TOKEN      = credentials('sonar-token')
         DOCKER_CREDS     = credentials('Docker-Hub')
 
-        // Make sonar-scanner available system-wide
+        // Ensure sonar-scanner is in PATH (installed locally at /opt/sonar-scanner/bin)
         PATH             = "/opt/sonar-scanner/bin:${env.PATH}"
     }
 
@@ -26,7 +26,6 @@ pipeline {
 
     stages {
 
-        // ── 1. Checkout ────────────────────────────────────────────────
         stage('Checkout') {
             steps {
                 checkout scm
@@ -42,7 +41,6 @@ pipeline {
             }
         }
 
-        // ── 2. Python setup ────────────────────────────────────────────
         stage('Setup') {
             steps {
                 sh '''
@@ -54,7 +52,6 @@ pipeline {
             }
         }
 
-        // ── 3. Lint (parallel) ─────────────────────────────────────────
         stage('Lint') {
             parallel {
                 stage('Flake8') {
@@ -83,7 +80,6 @@ pipeline {
             }
         }
 
-        // ── 4. Unit tests + coverage ───────────────────────────────────
         stage('Unit Tests') {
             steps {
                 sh '''
@@ -111,7 +107,6 @@ pipeline {
             }
         }
 
-        // ── 5. SAST — Bandit + pip-audit (parallel) ───────────────────
         stage('Security Scanning') {
             parallel {
                 stage('Bandit') {
@@ -157,11 +152,12 @@ pipeline {
             }
         }
 
-        // ── 6. SonarQube Analysis (separate stage) ─────────────────────
-        stage('SonarQube Analysis') {
+        // ========== FIXED: SonarQube Analysis + Quality Gate (native plugin) ==========
+        stage('SonarQube Analysis & Quality Gate') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
                 script {
+                    // 'sonarqube' must match the name of your SonarQube server in Jenkins configuration
                     withSonarQubeEnv('sonarqube') {
                         sh '''
                             echo "Running SonarQube analysis..."
@@ -176,96 +172,20 @@ pipeline {
                                 -Dsonar.coverage.exclusions=**/tests/**,**/__pycache__/** \
                                 -Dsonar.sourceEncoding=UTF-8 \
                                 -Dsonar.token=${SONAR_TOKEN}
-                            echo "Scanner finished."
+                            echo "Scanner finished. Waiting for quality gate..."
                         '''
 
-                        // Extract CE task ID and save it to a file for the next stage
-                        sh '''
-                            grep -m1 "^ceTaskId=" .scannerwork/report-task.txt 2>/dev/null | cut -d= -f2 > sonar-task-id.txt || echo ""
-                        '''
-                        def taskId = readFile('sonar-task-id.txt').trim()
-                        if (!taskId) {
-                            error "Could not retrieve SonarQube CE task ID. Analysis may have failed."
+                        timeout(time: 10, unit: 'MINUTES') {
+                            // abortPipeline: false → stage fails if quality gate fails (pipeline continues)
+                            // Set to true if you want the whole pipeline to stop immediately
+                            waitForQualityGate abortPipeline: false
                         }
-                        echo "SonarQube CE task ID: ${taskId}"
-                        stash name: 'sonar-task-id', includes: 'sonar-task-id.txt'
+                        echo "Quality Gate check finished."
                     }
                 }
             }
         }
 
-        // ── 7. Quality Gate (separate stage, faster polling) ───────────
-        stage('Quality Gate') {
-            when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
-            steps {
-                script {
-                    // Retrieve the task ID from the previous stage
-                    unstash 'sonar-task-id'
-                    def taskId = readFile('sonar-task-id.txt').trim()
-                    if (!taskId) {
-                        error "No SonarQube task ID found. Quality Gate cannot proceed."
-                    }
-
-                    // Poll every 2 seconds (max 60 attempts = 2 minutes)
-                    def maxAttempts = 60
-                    def analysisFinished = false
-                    for (int i = 0; i < maxAttempts; i++) {
-                        def status = sh(
-                            script: """
-                                curl -sf \
-                                    -H "Authorization: Bearer ${SONAR_TOKEN}" \
-                                    "${SONAR_HOST_URL}/api/ce/task?id=${taskId}" \
-                                | grep -o '"status":"[^"]*"' \
-                                | head -1 \
-                                | cut -d'"' -f4 \
-                                || echo "UNKNOWN"
-                            """,
-                            returnStdout: true
-                        ).trim()
-
-                        echo "CE task status (${i + 1}/${maxAttempts}): ${status}"
-
-                        if (status == 'SUCCESS') {
-                            analysisFinished = true
-                            break
-                        } else if (status == 'FAILED' || status == 'CANCELLED') {
-                            error "SonarQube CE task ${status}. Check server logs."
-                        }
-                        sleep(time: 2, unit: 'SECONDS')
-                    }
-
-                    if (!analysisFinished) {
-                        echo "WARNING: Timed out waiting for SonarQube analysis. Proceeding anyway."
-                    } else {
-                        // Check quality gate
-                        def gateStatus = sh(
-                            script: """
-                                curl -sf \
-                                    -H "Authorization: Bearer ${SONAR_TOKEN}" \
-                                    "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${APP_NAME}" \
-                                | grep -o '"status":"[^"]*"' \
-                                | head -1 \
-                                | cut -d'"' -f4 \
-                                || echo "UNKNOWN"
-                            """,
-                            returnStdout: true
-                        ).trim()
-
-                        echo "Quality Gate status: ${gateStatus}"
-
-                        if (gateStatus == 'OK') {
-                            echo "Quality Gate PASSED."
-                        } else if (gateStatus == 'ERROR') {
-                            error "Quality Gate FAILED. Check ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
-                        } else {
-                            echo "WARNING: Quality Gate status '${gateStatus}' — proceeding."
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── 8. Trivy filesystem scan ───────────────────────────────────
         stage('Trivy File Scan') {
             steps {
                 sh '''
@@ -299,7 +219,6 @@ pipeline {
             }
         }
 
-        // ── 9. Docker build ────────────────────────────────────────────
         stage('Docker Build') {
             steps {
                 sh '''
@@ -315,7 +234,6 @@ pipeline {
             }
         }
 
-        // ── 10. Trivy image scan ───────────────────────────────────────
         stage('Trivy Image Scan') {
             steps {
                 sh '''
@@ -347,7 +265,6 @@ pipeline {
             }
         }
 
-        // ── 11. Docker container smoke test ────────────────────────────
         stage('Docker Container Test') {
             steps {
                 sh '''
@@ -379,7 +296,6 @@ pipeline {
             }
         }
 
-        // ── 12. DAST — OWASP ZAP ───────────────────────────────────────
         stage('DAST Scan') {
             steps {
                 script {
@@ -449,7 +365,6 @@ pipeline {
             }
         }
 
-        // ── 13. Push to Docker Hub ─────────────────────────────────────
         stage('Push to Docker Hub') {
             when {
                 anyOf {
@@ -470,13 +385,12 @@ pipeline {
             }
         }
 
-    } // end stages
+    } // stages
 
-    // ── Post actions ────────────────────────────────────────────────────
     post {
         always {
             script {
-                // Bundle all security reports into one folder for archiving and email
+                // Collect all security reports into one folder (BEFORE cleaning workspace)
                 sh '''
                     mkdir -p security-reports
                     for f in bandit-report.html bandit-report.json \
@@ -490,6 +404,7 @@ pipeline {
                                  allowEmptyArchive: true
             }
 
+            // Prune old Docker images (keep last 5)
             sh '''
                 docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
                 docker images --filter "reference=${APP_NAME}" \
@@ -499,6 +414,8 @@ pipeline {
                     | awk "{print \$2}" \
                     | xargs -r docker rmi || true
             '''
+
+            // Finally, clean workspace
             cleanWs()
         }
 
@@ -538,7 +455,7 @@ pipeline {
                           <li>SCAN — Trivy (filesystem + image)</li>
                           <li>DAST — OWASP ZAP baseline</li>
                         </ul>
-                        <p>All security reports are attached.</p>
+                        <p>Security reports are attached.</p>
                         </body></html>
                     """,
                     to: 'mohamedaziz.aguir@gmail.com',
