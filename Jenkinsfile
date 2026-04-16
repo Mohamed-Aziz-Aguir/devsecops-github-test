@@ -28,6 +28,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
+                echo "Branch name: ${env.BRANCH_NAME}"
                 echo "Building ${APP_NAME} - Version: ${APP_VERSION} - Build #${BUILD_NUMBER}"
                 script {
                     def gitCommit = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo "unknown"', returnStdout: true).trim()
@@ -307,10 +308,8 @@ pipeline {
         }
 
         stage('Push to Docker Hub') {
-         
+            when { anyOf { branch 'main'; branch 'master' } }
             steps {
-                echo "Branch: ${env.BRANCH_NAME}"
-                when { anyOf { branch 'main'; branch 'master' } }
                 sh '''
                     echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
                     docker push ${DOCKER_IMAGE}:${APP_VERSION}
