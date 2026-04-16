@@ -83,7 +83,7 @@ pipeline {
 
                 git tag ${NEW_VERSION}
 
-                git push https://${GIT_USER}:${GIT_TOKEN}@github.com/mohamedazizaguir/secure-task-app.git ${NEW_VERSION}
+                git push https://${GIT_USER}:${GIT_TOKEN}@github.com/Mohamed-Aziz-Aguir/devsecops-github-test.git ${NEW_VERSION}
             '''
         }
     }
