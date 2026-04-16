@@ -38,38 +38,24 @@ pipeline {
             }
         }
 
-        stage('Generate Version') {
-   	    steps {
-            	script {
+        stage('Create Git Tag') {
+    steps {
+        withCredentials([usernamePassword(
+            credentialsId: 'github-token',
+            usernameVariable: 'GIT_USER',
+            passwordVariable: 'GIT_TOKEN'
+        )]) {
+            sh '''
+                git config user.email "jenkins@ci.local"
+                git config user.name "Jenkins CI"
 
-          	  // Get latest tag or default
-          	  def latestTag = sh(
-                  script: "git tag --sort=-v:refname | head -n 1",
-                  returnStdout: true
-          	  ).trim()
+                git tag ${NEW_VERSION}
 
-            	if (!latestTag) {
-                latestTag = "v0.0.0"
-            }
-
-            	echo "Latest tag: ${latestTag}"
-
-            	// Remove 'v'
-            	def cleanVersion = latestTag.replace("v", "")
-            	def parts = cleanVersion.tokenize('.')
-
-       	 	int major = parts.size() > 0 ? parts[0].toInteger() : 0
-            	int minor = parts.size() > 1 ? parts[1].toInteger() : 0
-            	int patch = parts.size() > 2 ? parts[2].toInteger() : 0
-
-            	patch = patch + 1
-
-            	env.NEW_VERSION = "v${major}.${minor}.${patch}"
-
-            	echo "Generated version: ${env.NEW_VERSION}"
-        		}
-    		}
-	}
+                git push https://${GIT_USER}:${GIT_TOKEN}@github.com/mohamedazizaguir/secure-task-app.git ${NEW_VERSION}
+            '''
+        }
+    }
+}
         stage('Create Git Tag') {
     	    steps {
        	        sh '''
