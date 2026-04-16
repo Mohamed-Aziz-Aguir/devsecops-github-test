@@ -307,6 +307,7 @@ pipeline {
         }
 
         stage('Push to Docker Hub') {
+            echo "Branch: ${env.BRANCH_NAME}"
             when { anyOf { branch 'main'; branch 'master' } }
             steps {
                 sh '''
