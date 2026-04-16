@@ -307,7 +307,6 @@ pipeline {
         }
 
         stage('Push to Docker Hub') {
-            when { anyOf { branch 'main'; branch 'master' } }
             steps {
                 sh '''
                     echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
