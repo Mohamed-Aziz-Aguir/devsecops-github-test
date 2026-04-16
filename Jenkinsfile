@@ -28,7 +28,6 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                sh 'git fetch --tags'
                 echo "Building ${APP_NAME} - Version: ${APP_VERSION} - Build #${BUILD_NUMBER}"
                 script {
                     def gitCommit = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo "unknown"', returnStdout: true).trim()
@@ -38,56 +37,6 @@ pipeline {
             }
         }
 
-        stage('Generate Version') {
-   	    steps {
-            	script {
-
-          	  // Get latest tag or default
-          	  def latestTag = sh(
-                  script: "git tag --sort=-v:refname | head -n 1",
-                  returnStdout: true
-          	  ).trim()
-
-            	if (!latestTag) {
-                latestTag = "v0.0.0"
-            }
-
-            	echo "Latest tag: ${latestTag}"
-
-            	// Remove 'v'
-            	def cleanVersion = latestTag.replace("v", "")
-            	def parts = cleanVersion.tokenize('.')
-
-       	 	int major = parts.size() > 0 ? parts[0].toInteger() : 0
-            	int minor = parts.size() > 1 ? parts[1].toInteger() : 0
-            	int patch = parts.size() > 2 ? parts[2].toInteger() : 0
-
-            	patch = patch + 1
-
-            	env.NEW_VERSION = "v${major}.${minor}.${patch}"
-
-            	echo "Generated version: ${env.NEW_VERSION}"
-        		}
-    		}
-	}
-        stage('Create Git Tag') {
-    steps {
-        withCredentials([usernamePassword(
-            credentialsId: 'github-token',
-            usernameVariable: 'GIT_USER',
-            passwordVariable: 'GIT_TOKEN'
-        )]) {
-            sh '''
-                git config user.email "jenkins@ci.local"
-                git config user.name "Jenkins CI"
-
-                git tag ${NEW_VERSION}
-
-                git push https://${GIT_USER}:${GIT_TOKEN}@github.com/Mohamed-Aziz-Aguir/devsecops-github-test.git ${NEW_VERSION}
-            '''
-        }
-    }
-}
         stage('Setup') {
             steps {
                 sh '''
@@ -263,11 +212,11 @@ pipeline {
         stage('Docker Build') {
             steps {
                 sh '''
-                    docker build -t ${APP_NAME}:${NEW_VERSION} -f docker/Dockerfile .
-                    docker tag ${APP_NAME}:${NEW_VERSION} ${APP_NAME}:latest
-                    docker tag ${APP_NAME}:${NEW_VERSION} ${DOCKER_IMAGE}:${NEW_VERSION}
-                    docker tag ${APP_NAME}:${NEW_VERSION} ${DOCKER_IMAGE}:latest
-                    docker tag ${APP_NAME}:${NEW_VERSION} ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
+                    docker build -t ${APP_NAME}:${APP_VERSION} -f docker/Dockerfile .
+                    docker tag ${APP_NAME}:${APP_VERSION} ${APP_NAME}:latest
+                    docker tag ${APP_NAME}:${APP_VERSION} ${DOCKER_IMAGE}:${APP_VERSION}
+                    docker tag ${APP_NAME}:${APP_VERSION} ${DOCKER_IMAGE}:latest
+                    docker tag ${APP_NAME}:${APP_VERSION} ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
                 '''
             }
         }
@@ -294,7 +243,7 @@ pipeline {
             steps {
                 sh '''
                     docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
-                    docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${NEW_VERSION}
+                    docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
                     for i in $(seq 1 12); do
                         curl -sf http://localhost:5000/health > /dev/null && echo "App is up (attempt ${i})" && break
                         echo "Waiting for app... (${i}/12)"; sleep 3
@@ -317,7 +266,7 @@ pipeline {
                 script {
                     sh '''
                         docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
-                        docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${NEW_VERSION}
+                        docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
                         for i in $(seq 1 12); do
                             curl -sf http://localhost:5000/health > /dev/null && echo "App ready (${i})" && break
                             echo "Waiting for app... (${i}/12)"; sleep 3
@@ -358,10 +307,11 @@ pipeline {
         }
 
         stage('Push to Docker Hub') {
+            when { anyOf { branch 'main'; branch 'master' } }
             steps {
                 sh '''
                     echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
-                    docker push ${DOCKER_IMAGE}:${NEW_VERSION}
+                    docker push ${DOCKER_IMAGE}:${APP_VERSION}
                     docker push ${DOCKER_IMAGE}:latest
                     docker push ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
                     docker logout
@@ -387,7 +337,7 @@ pipeline {
             script {
                 def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'GitHub Push'
                 emailext(
-                    subject: "✅ SUCCESS: ${APP_NAME} ${BUILD_NUMBER}",
+                    subject: "✅ SUCCESS: ${APP_NAME} #${BUILD_NUMBER}",
                     body: """
                         <html><body style="font-family:Arial,sans-serif;">
                         <h2>DevSecOps Pipeline — SUCCESS</h2><hr>
