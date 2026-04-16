@@ -39,28 +39,37 @@ pipeline {
         }
 
         stage('Generate Version') {
-            steps {
+   	    steps {
             	script {
-            	def latestTag = sh(
-            	    script: "git tag --sort=-v:refname | head -n 1 || echo v0.0.0",
-            	    returnStdout: true
-            	).trim()
+
+          	  // Get latest tag or default
+          	  def latestTag = sh(
+                  script: "git tag --sort=-v:refname | head -n 1",
+                  returnStdout: true
+          	  ).trim()
+
+            	if (!latestTag) {
+                latestTag = "v0.0.0"
+            }
 
             	echo "Latest tag: ${latestTag}"
 
-            	def version = latestTag.replace("v","").tokenize('.')
-            	int major = version[0].toInteger()
-            	int minor = version[1].toInteger()
-            	int patch = version[2].toInteger()
-	
-            	patch += 1   // increase patch version
+            	// Remove 'v'
+            	def cleanVersion = latestTag.replace("v", "")
+            	def parts = cleanVersion.tokenize('.')
+
+       	 	int major = parts.size() > 0 ? parts[0].toInteger() : 0
+            	int minor = parts.size() > 1 ? parts[1].toInteger() : 0
+            	int patch = parts.size() > 2 ? parts[2].toInteger() : 0
+
+            	patch = patch + 1
 
             	env.NEW_VERSION = "v${major}.${minor}.${patch}"
 
-            	echo "New version: ${env.NEW_VERSION}"
-       		}
-  	    }
-        }
+            	echo "Generated version: ${env.NEW_VERSION}"
+        		}
+    		}
+	}
         stage('Create Git Tag') {
     	    steps {
        	        sh '''
