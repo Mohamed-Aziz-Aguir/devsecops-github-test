@@ -307,9 +307,10 @@ pipeline {
         }
 
         stage('Push to Docker Hub') {
-            echo "Branch: ${env.BRANCH_NAME}"
-            when { anyOf { branch 'main'; branch 'master' } }
+         
             steps {
+                echo "Branch: ${env.BRANCH_NAME}"
+                when { anyOf { branch 'main'; branch 'master' } }
                 sh '''
                     echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
                     docker push ${DOCKER_IMAGE}:${APP_VERSION}
