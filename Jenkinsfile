@@ -317,8 +317,7 @@ pipeline {
                 '''
             }
         }
-    }
-stage('Deploy to Minikube') {
+        stage('Deploy to Minikube') {
     steps {
         sh '''
             kubectl config use-context minikube
@@ -333,6 +332,8 @@ stage('Deploy to Minikube') {
         '''
     }
 }
+    }
+
     post {
         always {
             script {
