@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: secure-task-ingress
+  namespace: devsecops
+spec:
+  rules:
+    - host: secure.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: secure-task-service
+                port:
+                  number: 80

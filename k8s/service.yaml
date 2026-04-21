@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: secure-task-service
+  namespace: devsecops
+spec:
+  selector:
+    app: secure-task-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+  type: NodePort

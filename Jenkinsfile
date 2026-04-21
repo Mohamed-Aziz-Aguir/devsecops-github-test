@@ -9,7 +9,7 @@ pipeline {
         DOCKER_IMAGE     = "${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${APP_NAME}"
         PYTHONPATH       = "${env.WORKSPACE}"
 
-        SONAR_HOST_URL   = "http://localhost:9000"
+        SONAR_HOST_URL   = "http://192.168.119.130:9000"
         SONAR_TOKEN      = credentials('sonar-token')
         DOCKER_CREDS     = credentials('Docker-Hub')
 
@@ -318,7 +318,21 @@ pipeline {
             }
         }
     }
+stage('Deploy to Minikube') {
+    steps {
+        sh '''
+            kubectl config use-context minikube
+            kubectl create namespace devsecops --dry-run=client -o yaml | kubectl apply -f -
 
+            # Replace image tag with actual version
+            export IMAGE_TAG=${APP_VERSION}
+            envsubst < k8s/deployment.yaml | kubectl apply -f - -n devsecops
+
+            kubectl apply -f k8s/service.yaml -n devsecops
+            kubectl rollout status deployment/${APP_NAME} -n devsecops
+        '''
+    }
+}
     post {
         always {
             script {

@@ -1,0 +1,14 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-internal-traffic
+  namespace: devsecops
+spec:
+  podSelector:
+    matchLabels:
+      app: secure-task-app
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}   # allow only cluster traffic

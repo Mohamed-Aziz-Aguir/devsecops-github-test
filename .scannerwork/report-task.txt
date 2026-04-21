@@ -1,0 +1,6 @@
+projectKey=secure-task-app
+serverUrl=http://localhost:9000
+serverVersion=26.4.0.121862
+dashboardUrl=http://localhost:9000/dashboard?id=secure-task-app
+ceTaskId=8bb82e35-8261-415d-af91-2065745d3a53
+ceTaskUrl=http://localhost:9000/api/ce/task?id=8bb82e35-8261-415d-af91-2065745d3a53
