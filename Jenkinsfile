@@ -369,35 +369,35 @@ EOF
                 docker rm -f falco-scanner || true
             '''
 
-            // Parse and evaluate results
-            sh '''
-                echo "=== Falco Alert Summary ==="
-                if [ -f falco-reports/falco-output.log ]; then
-                    CRITICAL=$(grep -c '"priority":"Critical"' falco-reports/falco-output.log || echo 0)
-                    ERROR=$(grep -c '"priority":"Error"' falco-reports/falco-output.log || echo 0)
-                    WARNING=$(grep -c '"priority":"Warning"' falco-reports/falco-output.log || echo 0)
-                    echo "Critical: ${CRITICAL} | Error: ${ERROR} | Warning: ${WARNING}"
+// Parse and evaluate results
+sh '''
+    echo "=== Falco Alert Summary ==="
+    if [ -f falco-reports/falco-output.log ]; then
+        CRITICAL=$(grep -c '"priority":"Critical"' falco-reports/falco-output.log || echo 0)
+        ERROR=$(grep -c '"priority":"Error"' falco-reports/falco-output.log || echo 0)
+        WARNING=$(grep -c '"priority":"Warning"' falco-reports/falco-output.log || echo 0)
+        echo "Critical: ${CRITICAL} | Error: ${ERROR} | Warning: ${WARNING}"
+        if [ "${CRITICAL}" -gt 0 ]; then
+            echo "CRITICAL Falco alerts detected:"
+            grep '"priority":"Critical"' falco-reports/falco-output.log || true
+        fi
+    else
+        echo "No Falco output found"
+    fi
+'''
 
-                    if [ "${CRITICAL}" -gt 0 ]; then
-                        echo "CRITICAL Falco alerts detected:"
-                        grep '"priority":"Critical"' falco-reports/falco-output.log || true
-                    fi
-                else
-                    echo "No Falco output found"
-                fi
-            '''
+// Fail build on CRITICAL alerts – robust parsing of the last line
+script {
+    def criticalCountStr = sh(
+        script: 'grep -c \'"priority":"Critical"\' falco-reports/falco-output.log 2>/dev/null || echo 0',
+        returnStdout: true
+    ).trim()
+    def criticalCount = (criticalCountStr.split('\\n')[-1] ?: '0').toInteger()
 
-            // Fail build on CRITICAL alerts
-            script {
-                def criticalCount = sh(
-                    script: 'grep -c \'"priority":"Critical"\' falco-reports/falco-output.log 2>/dev/null || echo 0',
-                    returnStdout: true
-                ).trim().toInteger()
-
-                if (criticalCount > 0) {
-                    error "Falco detected ${criticalCount} CRITICAL runtime security alert(s). Failing build."
-                }
-            }
+    if (criticalCount > 0) {
+        error "Falco detected ${criticalCount} CRITICAL runtime security alert(s). Failing build."
+    }
+}
         }
     }
     post {
