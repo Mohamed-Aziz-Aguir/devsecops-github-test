@@ -333,13 +333,19 @@ pipeline {
                     '''
 
                     // Fail build on CRITICAL alerts
-                    def criticalCount = sh(
-                        script: 'grep -c \'"priority":"Critical"\' falco-reports/falco-output.log 2>/dev/null || echo 0',
-                        returnStdout: true
-                    ).trim().toInteger()
-                    if (criticalCount > 0) {
-                        error "Falco detected ${criticalCount} CRITICAL runtime security alert(s). Failing build."
-                    }
+def criticalCount = sh(
+    script: '''
+        if [ -f falco-reports/falco-output.log ]; then
+            grep -c '"priority":"Critical"' falco-reports/falco-output.log || echo 0
+        else
+            echo 0
+        fi
+    ''',
+    returnStdout: true
+).trim().readLines().last().toInteger()
+if (criticalCount > 0) {
+    error "Falco detected ${criticalCount} CRITICAL runtime security alert(s). Failing build."
+}
                 }
             }
             post {
