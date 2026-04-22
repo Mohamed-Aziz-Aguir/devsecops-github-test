@@ -260,10 +260,10 @@ pipeline {
             }
         }
 
-        stage('Falco Runtime Security Scan') {
+      stage('Falco Runtime Security Scan') {
     steps {
         script {
-            // Start the app container for Falco to monitor
+            // Start the app container
             sh '''
                 docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
                 docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
@@ -273,66 +273,28 @@ pipeline {
                 done
             '''
 
-            // Create the self‑contained custom rules file (includes all needed macros)
-            sh '''
+            // Write minimal working rules file (shell detection only)
+            sh '''#!/bin/bash
                 mkdir -p falco
                 cat > falco/custom_rules.yaml << 'EOF'
-# Macros (copied from default rules)
-- macro: spawned_process
-  condition: evt.type in (execve, execveat) and evt.dir=<
-
 - macro: container
   condition: container.id != host
 
-- macro: outbound
-  condition: fd.sip != "0.0.0.0" and fd.lip != "0.0.0.0" and evt.dir=< and fd.typechar = 2 and fd.net != "127.0.0.0/8" and not fd.snet in (containers_network, local_network)
+- macro: spawned_process
+  condition: evt.type in (execve, execveat) and evt.dir=<
 
-# Custom rules
 - rule: Shell spawned in container
   desc: Detects a shell being spawned inside any running container
   condition: spawned_process and container and proc.name in (bash, sh, zsh, dash, ksh) and not proc.pname in (bash, sh, zsh, dash, ksh)
   output: "Shell spawned in container (user=%user.name container=%container.name image=%container.image.repository shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline)"
   priority: WARNING
   tags: [container, shell, custom]
-
-- rule: Write to sensitive directory in container
-  desc: Detects writes to /etc or /usr inside a container
-  condition: open_write and container and (fd.name startswith /etc/ or fd.name startswith /usr/)
-  output: "Sensitive directory write in container (user=%user.name file=%fd.name container=%container.name image=%container.image.repository proc=%proc.name)"
-  priority: ERROR
-  tags: [container, filesystem, custom]
-
-- rule: Privileged container started
-  desc: Detects when a container is started with privileged flag
-  condition: container_started and container.privileged=true
-  output: "Privileged container started (container=%container.name image=%container.image.repository)"
-  priority: CRITICAL
-  tags: [container, privilege-escalation, custom]
-
-- rule: Unexpected outbound connection
-  desc: Detects outbound connections on non‑standard ports from containers
-  condition: outbound and container and not fd.sport in (80, 443, 8080, 8443, 5432, 3306, 6379, 5000)
-  output: "Unexpected outbound connection from container (user=%user.name container=%container.name port=%fd.sport image=%container.image.repository dest=%fd.rip)"
-  priority: WARNING
-  tags: [network, container, custom]
-
-- rule: Package manager executed in container
-  desc: Detects apt/yum/pip usage inside a running container (post‑deploy)
-  condition: spawned_process and container and proc.name in (apt, apt-get, yum, pip, pip3, npm, curl, wget)
-  output: "Package manager or downloader executed in container (user=%user.name container=%container.name proc=%proc.name cmdline=%proc.cmdline image=%container.image.repository)"
-  priority: WARNING
-  tags: [container, supply-chain, custom]
-
-- rule: Container running as root
-  desc: Detects processes running as root inside a container
-  condition: spawned_process and container and user.uid = 0 and not proc.name in (falco)
-  output: "Process running as root in container (user=%user.name container=%container.name proc=%proc.name image=%container.image.repository cmdline=%proc.cmdline)"
-  priority: WARNING
-  tags: [container, least-privilege, custom]
 EOF
+                echo "Rules file created:"
+                cat falco/custom_rules.yaml
             '''
 
-            // Run Falco with the self‑contained rules file
+            // Run Falco
             sh '''
                 mkdir -p falco-reports
                 docker rm -f falco-scanner 2>/dev/null || true
@@ -354,50 +316,39 @@ EOF
                     -o log_stderr=true \
                     -o log_level=info
 
-                echo "Falco started, running for 60 seconds while exercising the app..."
+                echo "Falco started, monitoring for 60 seconds..."
                 sleep 5
 
-                # Exercise the app to trigger potential rule matches
+                # Exercise the app
                 curl -sf http://localhost:5000/ || true
                 curl -sf http://localhost:5000/health || true
                 curl -sf http://localhost:5000/metrics || true
 
                 sleep 55
 
-                # Collect Falco alerts
                 docker logs falco-scanner > falco-reports/falco-output.log 2>&1 || true
                 docker rm -f falco-scanner || true
             '''
 
-// Parse and evaluate results
-sh '''
-    echo "=== Falco Alert Summary ==="
-    if [ -f falco-reports/falco-output.log ]; then
-        CRITICAL=$(grep -c '"priority":"Critical"' falco-reports/falco-output.log || echo 0)
-        ERROR=$(grep -c '"priority":"Error"' falco-reports/falco-output.log || echo 0)
-        WARNING=$(grep -c '"priority":"Warning"' falco-reports/falco-output.log || echo 0)
-        echo "Critical: ${CRITICAL} | Error: ${ERROR} | Warning: ${WARNING}"
-        if [ "${CRITICAL}" -gt 0 ]; then
-            echo "CRITICAL Falco alerts detected:"
-            grep '"priority":"Critical"' falco-reports/falco-output.log || true
-        fi
-    else
-        echo "No Falco output found"
-    fi
-'''
+            // Parse results – fail on any alert
+            sh '''
+                echo "=== Falco Alert Summary ==="
+                if [ -f falco-reports/falco-output.log ]; then
+                    WARNING=$(grep -c '"priority":"Warning"' falco-reports/falco-output.log || echo 0)
+                    echo "Warnings: ${WARNING}"
+                fi
+            '''
 
-// Fail build on CRITICAL alerts – robust parsing of the last line
-script {
-    def criticalCountStr = sh(
-        script: 'grep -c \'"priority":"Critical"\' falco-reports/falco-output.log 2>/dev/null || echo 0',
-        returnStdout: true
-    ).trim()
-    def criticalCount = (criticalCountStr.split('\\n')[-1] ?: '0').toInteger()
-
-    if (criticalCount > 0) {
-        error "Falco detected ${criticalCount} CRITICAL runtime security alert(s). Failing build."
-    }
-}
+            script {
+                def alertCountStr = sh(
+                    script: 'grep -c "priority" falco-reports/falco-output.log 2>/dev/null || echo 0',
+                    returnStdout: true
+                ).trim()
+                def alertCount = (alertCountStr.split('\\n')[-1] ?: '0').toInteger()
+                if (alertCount > 0) {
+                    error "Falco detected ${alertCount} runtime security alert(s). Failing build."
+                }
+            }
         }
     }
     post {

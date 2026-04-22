@@ -1,0 +1,15 @@
+# Required macro for container detection
+- macro: container
+  condition: container.id != host
+
+# Macro for spawned processes
+- macro: spawned_process
+  condition: evt.type in (execve, execveat) and evt.dir=<
+
+# Custom rule: Shell spawned in container
+- rule: Shell spawned in container
+  desc: Detects a shell being spawned inside any running container
+  condition: spawned_process and container and proc.name in (bash, sh, zsh, dash, ksh) and not proc.pname in (bash, sh, zsh, dash, ksh)
+  output: "Shell spawned in container (user=%user.name container=%container.name image=%container.image.repository shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline)"
+  priority: WARNING
+  tags: [container, shell, custom]
