@@ -1,0 +1,13 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: secure-task-monitor
+  namespace: devsecops
+spec:
+  selector:
+    matchLabels:
+      app: secure-task-app
+  endpoints:
+    - port: metrics          # must match the port name in the service
+      interval: 30s
+      path: /metrics

@@ -3,11 +3,16 @@ kind: Service
 metadata:
   name: secure-task-service
   namespace: devsecops
+  labels:                     # <-- add this
+    app: secure-task-app      # <-- must match ServiceMonitor selector
 spec:
   selector:
     app: secure-task-app
   ports:
-    - protocol: TCP
+    - name: http
       port: 80
+      targetPort: 5000
+    - name: metrics
+      port: 8080
       targetPort: 5000
   type: NodePort

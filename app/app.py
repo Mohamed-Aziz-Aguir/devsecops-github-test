@@ -4,6 +4,7 @@ Production banking backend with JWT authentication, PostgreSQL,
 and core banking operations (deposit, withdraw, transfer).
 Single‑file version – all blueprints defined inline.
 Includes / and /secure endpoints for pipeline health checks.
+Includes Prometheus metrics at /metrics (plain text).
 """
 import os
 import time
@@ -22,6 +23,9 @@ from flask_talisman import Talisman
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from marshmallow import Schema, fields, validate, ValidationError
+
+# NEW: Prometheus metrics
+from prometheus_flask_exporter import PrometheusMetrics
 
 # ----------------------------------------------------------------------
 # 1. App Configuration
@@ -110,6 +114,9 @@ def create_app(config_name=None):
     bcrypt.init_app(app)
     limiter.init_app(app)
 
+    # NEW: Prometheus metrics (exposes /metrics with correct content-type)
+    metrics = PrometheusMetrics(app, group_by='endpoint')
+
     # Security headers (Talisman)
     Talisman(
         app,
@@ -143,13 +150,8 @@ def create_app(config_name=None):
     def health():
         return jsonify({"status": "healthy"})
 
-    @app.route('/metrics')
-    def metrics():
-        return jsonify({
-            "uptime": time.time() - app.config.get('START_TIME', time.time()),
-            "status": "operational"
-        })
-
+    # NOTE: The /metrics endpoint is now provided by PrometheusMetrics.
+    # We remove the old JSON version to avoid conflicts.
     # Simple endpoints expected by the pipeline
     @app.route('/')
     def home():
