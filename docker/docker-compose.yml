@@ -39,6 +39,32 @@ services:
       JWT_SECRET_KEY: your-jwt-secret
     volumes:
       - ./app:/app/app
+   
+   falco:
+    image: falcosecurity/falco-no-driver:latest
+    container_name: falco
+    privileged: true                        # Required — Falco needs kernel access
+    pid: host                               # Access host PID namespace
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock   # Docker socket
+      - /proc:/host/proc:ro                              # Host proc fs
+      - /boot:/host/boot:ro                              # Kernel info
+      - /lib/modules:/host/lib/modules:ro                # Kernel modules
+      - /usr:/host/usr:ro
+      - /etc:/host/etc:ro
+      - ./falco/custom_rules.yaml:/etc/falco/rules.d/custom_rules.yaml:ro
+    environment:
+      - FALCO_GRPC_ENABLED=true
+      - FALCO_GRPC_BIND_ADDRESS=0.0.0.0:5060
+    command: >
+      falco
+      --rules-file /etc/falco/falco_rules.yaml
+      --rules-file /etc/falco/rules.d/custom_rules.yaml
+      -o json_output=true
+      -o log_stderr=true
+    restart: unless-stopped
+    networks:
+      - your_network_name       # ← replace with your actual network name   
 
 volumes:
   postgres_data:

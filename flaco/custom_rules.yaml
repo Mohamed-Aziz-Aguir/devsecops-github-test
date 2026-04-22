@@ -1,9 +1,4 @@
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: secure-task-monitor
-  namespace: devsecops
-spec:- rule: Unexpected shell in container
+- rule: Unexpected shell in container
   desc: Detects a shell being spawned in any container
   condition: >
     spawned_process and container
@@ -62,10 +57,3 @@ spec:- rule: Unexpected shell in container
     (user=%user.name container=%container.name image=%container.image.repository)
   priority: WARNING
   tags: [container, kubernetes, custom]
-  selector:
-    matchLabels:
-      app: secure-task-app
-  endpoints:
-    - port: metrics          # must match the port name in the service
-      interval: 30s
-      path: /metrics

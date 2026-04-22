@@ -206,6 +206,7 @@ pipeline {
             }
             post {
                 always { archiveArtifacts artifacts: 'trivy-reports/trivy-fs.*', allowEmptyArchive: true }
+                
             }
         }
 
@@ -332,6 +333,96 @@ pipeline {
         '''
     }
 }
+stage('Falco Runtime Security Scan') {
+    steps {
+        script {
+            // Start the app container for Falco to monitor
+            sh '''
+                docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
+                docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
+                for i in $(seq 1 12); do
+                    curl -sf http://localhost:5000/health > /dev/null && echo "App ready (${i})" && break
+                    echo "Waiting for app... (${i}/12)"; sleep 3
+                done
+            '''
+
+            // Start Falco in background, monitoring for 60 seconds
+            sh '''
+                mkdir -p falco-reports
+                mkdir -p /tmp/falco-logs
+
+                docker run -d --name falco-scanner \
+                    --privileged \
+                    --pid=host \
+                    -v /var/run/docker.sock:/host/var/run/docker.sock \
+                    -v /proc:/host/proc:ro \
+                    -v /boot:/host/boot:ro \
+                    -v /lib/modules:/host/lib/modules:ro \
+                    -v /usr:/host/usr:ro \
+                    -v /etc:/host/etc:ro \
+                    -v $(pwd)/falco/custom_rules.yaml:/etc/falco/rules.d/custom_rules.yaml:ro \
+                    -v $(pwd)/falco/falco.yaml:/etc/falco/falco.yaml:ro \
+                    -v /tmp/falco-logs:/var/log/falco \
+                    falcosecurity/falco-no-driver:latest
+
+                echo "Falco started, running for 60 seconds while exercising the app..."
+                sleep 5
+
+                # Exercise the app to trigger potential rule matches
+                curl -sf http://localhost:5000/ || true
+                curl -sf http://localhost:5000/health || true
+                curl -sf http://localhost:5000/metrics || true
+
+                sleep 55
+
+                # Collect Falco alerts
+                docker logs falco-scanner > falco-reports/falco-output.log 2>&1 || true
+                cp /tmp/falco-logs/falco-alerts.log falco-reports/falco-alerts.json 2>/dev/null || true
+
+                docker stop falco-scanner || true
+                docker rm falco-scanner || true
+            '''
+
+            // Parse and evaluate results
+            sh '''
+                echo "=== Falco Alert Summary ==="
+                if [ -f falco-reports/falco-output.log ]; then
+                    CRITICAL=$(grep -c '"priority":"Critical"' falco-reports/falco-output.log || echo 0)
+                    ERROR=$(grep -c '"priority":"Error"' falco-reports/falco-output.log || echo 0)
+                    WARNING=$(grep -c '"priority":"Warning"' falco-reports/falco-output.log || echo 0)
+                    echo "Critical: ${CRITICAL} | Error: ${ERROR} | Warning: ${WARNING}"
+
+                    if [ "${CRITICAL}" -gt 0 ]; then
+                        echo "CRITICAL Falco alerts detected:"
+                        grep '"priority":"Critical"' falco-reports/falco-output.log || true
+                    fi
+                else
+                    echo "No Falco output found"
+                fi
+            '''
+
+            // Fail build on CRITICAL alerts (optional — change to WARNING to be strict)
+            script {
+                def criticalCount = sh(
+                    script: 'grep -c \'"priority":"Critical"\' falco-reports/falco-output.log 2>/dev/null || echo 0',
+                    returnStdout: true
+                ).trim().toInteger()
+
+                if (criticalCount > 0) {
+                    error "Falco detected ${criticalCount} CRITICAL runtime security alert(s). Failing build."
+                }
+            }
+        }
+    }
+    post {
+        always {
+            archiveArtifacts artifacts: 'falco-reports/**', allowEmptyArchive: true
+            sh 'docker stop falco-scanner 2>/dev/null || true'
+            sh 'docker rm falco-scanner 2>/dev/null || true'
+            sh 'docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true'
+        }
+    }
+}
     }
 
     post {
@@ -343,6 +434,8 @@ pipeline {
                         [ -f "$f" ] && cp "$f" security-reports/ || true
                     done
                     [ -d trivy-reports ] && cp trivy-reports/* security-reports/ 2>/dev/null || true
+                    [ -d falco-reports ] && cp falco-reports/* security-reports/ 2>/dev/null || true
+
                 '''
                 archiveArtifacts artifacts: 'security-reports/**', allowEmptyArchive: true
             }
@@ -370,6 +463,7 @@ pipeline {
                             <li>pip-audit (dependencies)</li>
                             <li>Trivy (filesystem + image)</li>
                             <li>DAST: OWASP ZAP</li>
+                            <li>Falco Runtime Security Scan (custom rules)</li>
                         </ul>
                         <p>Attached: all security reports.</p>
                         </body></html>

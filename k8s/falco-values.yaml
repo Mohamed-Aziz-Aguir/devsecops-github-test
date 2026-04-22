@@ -1,0 +1,52 @@
+falco:
+  metrics:
+    enabled: false
+  customRules:
+    custom-rules.yaml: |
+      # Custom Rules for secure-task-app
+      
+      # --- Macros (Reusable Conditions) ---
+      # Define a macro to identify your app's container
+      - macro: secure_task_app
+        condition: container.image.repository contains "mohamedazizaguir/secure-task-app"
+      
+      # Define a macro to identify your app's dependencies (PostgreSQL & Redis)
+      - macro: app_dependency
+        condition: container.image.repository contains "postgres" or container.image.repository contains "redis"
+      
+      # Define a macro for any command that spawns a shell
+      - macro: shell_spawned
+        condition: spawned_process and proc.name in (bash, sh, zsh, ksh, csh, dash, ash)
+      
+      # Define a list of sensitive files to monitor
+      - list: sensitive_files
+        items: [/etc/shadow, /etc/passwd, /root/.ssh/authorized_keys, /app/secrets, /app/.env]
+      
+      # --- Rules ---
+      - rule: Shell in Secure Task App Container
+        desc: Detect a shell being spawned inside your main application container
+        condition: shell_spawned and secure_task_app
+        output: "Shell spawned in secure-task-app container (user=%user.name proc=%proc.name image=%container.image.repository)"
+        priority: WARNING
+        tags: [container, shell, mitre_execution]
+      
+      - rule: Shell in Dependency Container
+        desc: Detect a shell being spawned inside a PostgreSQL or Redis container
+        condition: shell_spawned and app_dependency
+        output: "Shell spawned in dependency container (user=%user.name proc=%proc.name image=%container.image.repository)"
+        priority: WARNING
+        tags: [container, shell, mitre_execution]
+      
+      - rule: Sensitive File Access in Secure Task App
+        desc: Alert on read or write attempts to sensitive files
+        condition: (open_read or open_write) and secure_task_app and fd.name in (sensitive_files)
+        output: "Sensitive file accessed in secure-task-app container (file=%fd.name proc=%proc.name image=%container.image.repository)"
+        priority: ERROR
+        tags: [container, filesystem, mitre_credential_access]
+      
+      - rule: Unexpected Outbound from Secure Task App
+        desc: Detect outbound network connections to unexpected ports
+        condition: outbound and secure_task_app and not fd.sport in (5000, 80, 443, 53, 3306, 6379)
+        output: "Unexpected outbound connection from secure-task-app (port=%fd.sport proc=%proc.name image=%container.image.repository)"
+        priority: NOTICE
+        tags: [container, network, mitre_discovery]
