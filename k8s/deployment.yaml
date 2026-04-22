@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: secure-task-app
-          image: mohamedazizaguir/secure-task-app:latest
+          image: mohamedazizaguir/secure-task-app:${IMAGE_TAG}
           imagePullPolicy: Always
 
           ports:
