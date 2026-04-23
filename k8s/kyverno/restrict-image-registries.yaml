@@ -6,8 +6,6 @@ metadata:
     policies.kyverno.io/title: Restrict Image Registries
     policies.kyverno.io/category: Supply Chain Security
     policies.kyverno.io/severity: high
-    policies.kyverno.io/description: >-
-      Only allows container images pulled from trusted registries.
 spec:
   validationFailureAction: Enforce
   background: true
@@ -35,7 +33,7 @@ spec:
                 - Pod
       preconditions:
         any:
-          - key: "{{ request.object.spec.initContainers[] | length(@) }}"
+          - key: "{{ request.object.spec.initContainers | length(@) }}"
             operator: GreaterThanOrEquals
             value: 1
       validate:
