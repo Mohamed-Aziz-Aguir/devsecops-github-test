@@ -17,7 +17,7 @@ including CI/CD, security scanning, Kubernetes deployment, and monitoring.
 ## 🏗️ Architecture Overview
 
 <p align="center">
-  <img src="docs/images/devsecops-architecture.png" width="900"/>
+  <img src="docs/images/Diagram-Architecture.png" width="900"/>
 </p>
 
 ------------------------------------------------------------------------
@@ -244,5 +244,6 @@ sudo systemctl stop jenkins
 
 ## 👤 Author
 
-Aziz -- DevSecOps / Cybersecurity
+Mohamed Aziz Aguir
+DevSecOps & Cybersecurity Engineer
 
