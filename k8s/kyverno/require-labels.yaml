@@ -1,0 +1,79 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-labels
+  annotations:
+    policies.kyverno.io/title: Require Standard Labels
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Enforces that all Pods, Deployments, Services, and StatefulSets carry the
+      mandatory labels: app.kubernetes.io/name, app.kubernetes.io/version, and
+      environment. This improves observability and aligns with Falco alert
+      enrichment in the devsecops-github-test project.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-labels-on-pods
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          Pod must have labels: 'app.kubernetes.io/name',
+          'app.kubernetes.io/version', and 'environment'.
+        pattern:
+          metadata:
+            labels:
+              app.kubernetes.io/name: "?*"
+              app.kubernetes.io/version: "?*"
+              environment: "?*"
+
+    - name: require-labels-on-deployments
+      match:
+        any:
+          - resources:
+              kinds:
+                - Deployment
+                - StatefulSet
+                - DaemonSet
+      validate:
+        message: >-
+          Workload must have labels: 'app.kubernetes.io/name',
+          'app.kubernetes.io/version', and 'environment'.
+        pattern:
+          metadata:
+            labels:
+              app.kubernetes.io/name: "?*"
+              app.kubernetes.io/version: "?*"
+              environment: "?*"
+          spec:
+            template:
+              metadata:
+                labels:
+                  app.kubernetes.io/name: "?*"
+                  app.kubernetes.io/version: "?*"
+                  environment: "?*"
+
+    - name: require-labels-on-services
+      match:
+        any:
+          - resources:
+              kinds:
+                - Service
+      exclude:
+        any:
+          - resources:
+              names:
+                - kubernetes   # skip the default k8s service
+      validate:
+        message: >-
+          Service must have labels: 'app.kubernetes.io/name' and 'environment'.
+        pattern:
+          metadata:
+            labels:
+              app.kubernetes.io/name: "?*"
+              environment: "?*"

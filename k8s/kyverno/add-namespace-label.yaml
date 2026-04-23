@@ -1,0 +1,66 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: add-namespace-label
+  annotations:
+    policies.kyverno.io/title: Add Namespace Labels
+    policies.kyverno.io/category: Multi-Tenancy
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Automatically mutates new Namespaces to add two labels:
+        - 'project: devsecops-github-test'  (ties namespace to this project)
+        - 'pod-security.kubernetes.io/enforce: restricted'  (activates Pod
+          Security Standards in restricted mode for all pods in the namespace)
+      This also ensures Falco rules that filter by namespace label work
+      out-of-the-box without manual annotation.
+spec:
+  rules:
+    - name: add-project-label
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+      exclude:
+        any:
+          - resources:
+              names:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+                - falco
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            labels:
+              +(project): "devsecops-github-test"
+              +(pod-security.kubernetes.io/enforce): "restricted"
+              +(pod-security.kubernetes.io/enforce-version): "latest"
+              +(pod-security.kubernetes.io/warn): "restricted"
+              +(pod-security.kubernetes.io/warn-version): "latest"
+
+    - name: validate-namespace-has-owner
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+      exclude:
+        any:
+          - resources:
+              names:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+                - falco
+                - default
+      validate:
+        message: >-
+          Namespace must carry an 'owner' label identifying the responsible
+          team or person (e.g., owner: aziz).
+        pattern:
+          metadata:
+            labels:
+              owner: "?*"

@@ -431,6 +431,45 @@ EOF
                 '''
             }
         }
+        
+        stage('Kyverno Policy Check') {
+    steps {
+        sh '''
+            echo "=== Checking Kyverno ClusterPolicies are ready ==="
+            kubectl get clusterpolicy
+
+            NOT_READY=$(kubectl get clusterpolicy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.ready}{"\n"}{end}' | grep -v "true" || true)
+            if [ -n "$NOT_READY" ]; then
+                echo "The following policies are NOT ready:"
+                echo "$NOT_READY"
+                exit 1
+            fi
+            echo "All Kyverno policies are ready."
+
+            echo "=== Checking PolicyReports for violations in devsecops namespace ==="
+            mkdir -p kyverno-reports
+
+            kubectl get policyreport -n devsecops -o json > kyverno-reports/policyreport.json 2>/dev/null || echo "{}" > kyverno-reports/policyreport.json
+            kubectl get clusterpolicyreport -o json > kyverno-reports/clusterpolicyreport.json 2>/dev/null || echo "{}" > kyverno-reports/clusterpolicyreport.json
+
+            FAIL_COUNT=$(cat kyverno-reports/policyreport.json | grep -c '"result":"fail"' || echo 0)
+            echo "Policy violations found: ${FAIL_COUNT}"
+
+            if [ "$FAIL_COUNT" -gt 0 ]; then
+                echo "=== Violation Details ==="
+                cat kyverno-reports/policyreport.json | grep -A5 '"result":"fail"' || true
+                exit 1
+            fi
+
+            echo "No Kyverno policy violations detected."
+        '''
+    }
+    post {
+        always {
+            archiveArtifacts artifacts: 'kyverno-reports/**', allowEmptyArchive: true
+        }
+    }
+}
 
     }
 
@@ -472,6 +511,8 @@ EOF
                             <li>Trivy (filesystem + image)</li>
                             <li>Falco Runtime Security Scan (custom rules)</li>
                             <li>DAST: OWASP ZAP</li>
+                            <li>Kyverno Policy Enforcement (labels, registries, namespaces)</li>
+
                         </ul>
                         <p>Attached: all security reports.</p>
                         </body></html>

@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-nginx
+  labels:
+    app: test
+    team: devsecops
+    environment: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test
+  template:
+    metadata:
+      labels:
+        app: test
+        team: devsecops
+        environment: staging
+    spec:
+      containers:
+      - name: nginx
+        image: gcr.io/google-samples/nginx:1.27

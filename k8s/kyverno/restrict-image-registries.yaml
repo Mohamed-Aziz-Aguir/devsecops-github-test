@@ -1,0 +1,66 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-image-registries
+  annotations:
+    policies.kyverno.io/title: Restrict Image Registries
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Only allows container images pulled from trusted registries.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: restrict-registries
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          Images must be pulled from an approved registry.
+          Allowed: docker.io/mohamedazizaguir/* or docker.io/library/*
+        foreach:
+          - list: "request.object.spec.containers"
+            pattern:
+              image: "docker.io/mohamedazizaguir/* | docker.io/library/* | mohamedazizaguir/* | library/*"
+
+    - name: restrict-registries-init-containers
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      preconditions:
+        any:
+          - key: "{{ request.object.spec.initContainers[] | length(@) }}"
+            operator: GreaterThanOrEquals
+            value: 1
+      validate:
+        message: >-
+          Init container images must also come from an approved registry.
+        foreach:
+          - list: "request.object.spec.initContainers"
+            pattern:
+              image: "docker.io/mohamedazizaguir/* | docker.io/library/* | mohamedazizaguir/* | library/*"
+
+    - name: disallow-latest-tag
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          Using the ':latest' image tag is not allowed.
+          Pin images to a specific version tag.
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.image }}"
+                    operator: Equals
+                    value: "*:latest"
