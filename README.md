@@ -106,6 +106,17 @@ minikube start --driver=docker --cpus=4 --memory=6g
 
 Open: http://localhost:8080
 
+ ⚠️ **Important setup note**
+
+ Before running the pipeline, make sure everything is properly linked:
+
+ - Generate a **SonarQube token** and add it in Jenkins (`sonar-token`)
+ - Add your **Docker Hub credentials** in Jenkins (`Docker-Hub`)
+ - Connect **GitHub → Jenkins** (webhook or manual trigger)
+ - Configure **SonarQube server in Jenkins** (URL + token)
+
+If any of these are missing, the pipeline will fail during build or scans.
+
 ------------------------------------------------------------------------
 
 ## 🚀 Run Pipeline
