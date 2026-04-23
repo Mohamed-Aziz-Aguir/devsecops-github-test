@@ -1,12 +1,54 @@
-# 🚀 DevSecOps Pipeline -- Secure Task App
+# 🚀 DevSecOps Pipeline – Secure Task App
 
-This project shows a complete DevSecOps pipeline for a Python Flask app.
+![Jenkins](https://img.shields.io/badge/CI-Jenkins-blue?logo=jenkins)
+![Docker](https://img.shields.io/badge/Container-Docker-blue?logo=docker)
+![Kubernetes](https://img.shields.io/badge/Orchestration-Kubernetes-blue?logo=kubernetes)
+![Security](https://img.shields.io/badge/Security-DevSecOps-red)
+![Python](https://img.shields.io/badge/Python-3.x-yellow?logo=python)
+![License](https://img.shields.io/badge/License-MIT-green)
 
-It covers everything from code → build → security scans → Docker →
-Kubernetes deployment → monitoring.
+---
+
+This project implements a full DevSecOps pipeline for a Flask application,
+including CI/CD, security scanning, Kubernetes deployment, and monitoring.
 
 ------------------------------------------------------------------------
 
+## 🏗️ Architecture Overview
+
+<p align="center">
+  <img src="docs/images/devsecops-architecture.png" width="900"/>
+</p>
+
+------------------------------------------------------------------------
+
+## 🔄 Pipeline Flow
+
+1. Code pushed to GitHub
+2. Jenkins triggers pipeline
+3. Linting (Flake8, Pylint)
+4. Unit testing (pytest + coverage)
+5. SAST (SonarQube, Bandit)
+6. Dependency scan (pip-audit)
+7. Trivy filesystem scan
+8. Docker build
+9. Trivy image scan
+10. Container runtime test
+11. Falco runtime security monitoring
+12. DAST scan (OWASP ZAP)
+13. Push image to Docker Hub
+14. Deploy to Kubernetes (Minikube)
+15. Policy enforcement (Kyverno)
+
+------------------------------------------------------------------------
+
+## 📸 Pipeline Preview
+
+<p align="center">
+  <img src="docs/images/Pipeline-Preview.png" width="900"/>
+</p>
+
+------------------------------------------------------------------------
 ## 📦 Stack Used
 
 -   CI/CD: Jenkins
@@ -106,16 +148,33 @@ minikube start --driver=docker --cpus=4 --memory=6g
 
 Open: http://localhost:8080
 
- ⚠️ **Important setup note**
+## ⚠️ Required Integrations (DO THIS FIRST)
 
- Before running the pipeline, make sure everything is properly linked:
+Before running the pipeline, make sure everything is properly configured:
 
- - Generate a **SonarQube token** and add it in Jenkins (`sonar-token`)
- - Add your **Docker Hub credentials** in Jenkins (`Docker-Hub`)
- - Connect **GitHub → Jenkins** (webhook or manual trigger)
- - Configure **SonarQube server in Jenkins** (URL + token)
+- Generate a **SonarQube token** and add it in Jenkins (`sonar-token`)
+- Add your **Docker Hub credentials** in Jenkins (`Docker-Hub`)
+- Connect **GitHub → Jenkins** (webhook or manual trigger)
+- Configure **SonarQube server in Jenkins** (URL + token)
 
-If any of these are missing, the pipeline will fail during build or scans.
+### 📧 Email Notifications (Required)
+
+This pipeline sends email notifications on success/failure.
+
+Configure it in Jenkins:
+
+1. Go to **Manage Jenkins → Configure System**
+2. Find **Extended E-mail Notification**
+3. Set:
+   - SMTP server (example: Gmail → `smtp.gmail.com`)
+   - Port: `587`
+   - Use TLS: ✅
+   - Username: your email
+   - Password: **App Password** (not your real password)
+
+4. Test configuration
+
+⚠️ Without this step, the pipeline may fail at the notification stage.
 
 ------------------------------------------------------------------------
 
