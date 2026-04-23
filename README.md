@@ -136,7 +136,7 @@ docker run -d --name sonarqube -p 9000:9000 -e SONAR_ES_BOOTSTRAP_CHECKS_DISABLE
 
 ------------------------------------------------------------------------
 
-### Minikube
+### 🛡️ Minikube
 
 ``` bash
 minikube start --driver=docker --cpus=4 --memory=6g
@@ -144,7 +144,7 @@ minikube start --driver=docker --cpus=4 --memory=6g
 
 ------------------------------------------------------------------------
 
-### Jenkins
+### 🧱 Jenkins
 
 Open: http://localhost:8080
 
