@@ -12,3 +12,17 @@ build/
 bandit-report.*
 audit-report.*
 test-results.xml
+
+# Generated and temporary files
+.scannerwork/
+.sonar_lock
+report-task.txt
+security-reports/
+trivy-reports/
+falco-reports/
+venv/
+__pycache__/
+*.pyc
+.coverage
+htmlcov/
+.pytest_cache/
