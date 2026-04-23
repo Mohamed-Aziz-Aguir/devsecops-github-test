@@ -424,9 +424,8 @@ EOF
                     kubectl create namespace devsecops --dry-run=client -o yaml | kubectl apply -f -
 
                     export IMAGE_TAG=${APP_VERSION}
-                    envsubst < k8s/deployment.yaml | kubectl apply -f - -n devsecops
-
-                    kubectl apply -f k8s/service.yaml -n devsecops
+                   envsubst < k8s/base/deployment.yaml | kubectl apply -f - -n devsecops
+kubectl apply -f k8s/base/service.yaml -n devsecops
                     kubectl rollout status deployment/${APP_NAME} -n devsecops
                 '''
             }
