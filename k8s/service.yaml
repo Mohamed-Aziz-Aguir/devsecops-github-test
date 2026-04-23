@@ -3,8 +3,10 @@ kind: Service
 metadata:
   name: secure-task-service
   namespace: devsecops
-  labels:                     # <-- add this
-    app: secure-task-app      # <-- must match ServiceMonitor selector
+  labels:
+    app: secure-task-app
+    app.kubernetes.io/name: secure-task-app
+    environment: dev
 spec:
   selector:
     app: secure-task-app

@@ -5,6 +5,9 @@ metadata:
   namespace: devsecops
   labels:
     app: secure-task-app
+    app.kubernetes.io/name: secure-task-app
+    app.kubernetes.io/version: "1.0.0"
+    environment: dev
 spec:
   replicas: 2
   selector:
@@ -14,6 +17,9 @@ spec:
     metadata:
       labels:
         app: secure-task-app
+        app.kubernetes.io/name: secure-task-app
+        app.kubernetes.io/version: "1.0.0"
+        environment: dev
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "5000"
@@ -22,26 +28,20 @@ spec:
         - name: secure-task-app
           image: mohamedazizaguir/secure-task-app:${IMAGE_TAG}
           imagePullPolicy: Always
-
           ports:
             - containerPort: 5000
-
-          # Health checks
           readinessProbe:
             httpGet:
               path: /health
               port: 5000
             initialDelaySeconds: 5
             periodSeconds: 5
-
           livenessProbe:
             httpGet:
               path: /health
               port: 5000
             initialDelaySeconds: 10
             periodSeconds: 10
-
-          # Resources
           resources:
             requests:
               cpu: "100m"
@@ -49,9 +49,6 @@ spec:
             limits:
               cpu: "500m"
               memory: "256Mi"
-
-          # Security (important)
           securityContext:
             allowPrivilegeEscalation: false
-
       restartPolicy: Always
