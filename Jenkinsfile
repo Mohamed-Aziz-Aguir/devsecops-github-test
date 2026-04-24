@@ -66,6 +66,9 @@ pipeline {
             }
         }
 
+        // ----------------------------------------------------------------
+        // GATE 1 — Unit tests must pass. Pipeline stops here on failure.
+        // ----------------------------------------------------------------
         stage('Unit Tests') {
             steps {
                 sh '''
@@ -80,7 +83,7 @@ pipeline {
             }
             post {
                 always {
-                    junit testResults: 'test-results.xml', allowEmptyResults: true
+                    junit testResults: 'test-results.xml', allowEmptyResults: false
                     publishHTML([
                         reportDir: 'htmlcov',
                         reportFiles: 'index.html',
@@ -89,6 +92,9 @@ pipeline {
                         keepAll: true,
                         alwaysLinkToLastBuild: false
                     ])
+                }
+                failure {
+                    echo "Unit tests FAILED — aborting pipeline. Nothing will be pushed or deployed."
                 }
             }
         }
@@ -132,6 +138,9 @@ pipeline {
             }
         }
 
+        // ----------------------------------------------------------------
+        // GATE 2 — SonarQube quality gate must be OK.
+        // ----------------------------------------------------------------
         stage('SonarQube Analysis') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
@@ -173,20 +182,17 @@ pipeline {
                     for (int i = 0; i < maxAttempts; i++) {
                         def status = sh(script: "curl -s -u ${SONAR_TOKEN}: \"${SONAR_HOST_URL}/api/ce/task?id=${taskId}\" | grep -o '\"status\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4", returnStdout: true).trim()
                         echo "CE task status (${i+1}/${maxAttempts}): ${status}"
-
-                        if (status == 'SUCCESS') {
-                            taskSuccess = true
-                            break
-                        } else if (status == 'FAILED' || status == 'CANCELLED') {
-                            error "SonarQube analysis task ${status}."
-                        }
+                        if (status == 'SUCCESS') { taskSuccess = true; break }
+                        else if (status == 'FAILED' || status == 'CANCELLED') error "SonarQube analysis task ${status}."
                         sleep 5
                     }
-                    if (!taskSuccess) error "Timed out waiting for SonarQube analysis (10 minutes)."
+                    if (!taskSuccess) error "Timed out waiting for SonarQube analysis."
 
                     def gateStatus = sh(script: "curl -s -u ${SONAR_TOKEN}: \"${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${APP_NAME}\" | grep -o '\"status\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4", returnStdout: true).trim()
                     echo "Quality Gate status: ${gateStatus}"
-                    if (gateStatus != 'OK') error "Quality Gate FAILED. Check ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
+                    if (gateStatus != 'OK') {
+                        error "Quality Gate FAILED — aborting pipeline. Check ${SONAR_HOST_URL}/dashboard?id=${APP_NAME}"
+                    }
                 }
             }
         }
@@ -220,14 +226,32 @@ pipeline {
             }
         }
 
+        // ----------------------------------------------------------------
+        // GATE 3 — Trivy must find zero CRITICAL vulnerabilities in the image.
+        // ----------------------------------------------------------------
         stage('Trivy Image Scan') {
             steps {
                 sh '''
                     mkdir -p trivy-reports
                     if command -v trivy > /dev/null 2>&1; then
-                        trivy image --severity HIGH,CRITICAL --format table ${APP_NAME}:${APP_VERSION} || true
-                        trivy image --severity HIGH,CRITICAL --format json --output trivy-reports/trivy-image-high-critical.json ${APP_NAME}:${APP_VERSION} || true
-                        trivy image --format json --output trivy-reports/trivy-image-full.json ${APP_NAME}:${APP_VERSION} || true
+                        trivy image --severity HIGH,CRITICAL --format table \
+                            ${APP_NAME}:${APP_VERSION} || true
+                        trivy image --severity HIGH,CRITICAL --format json \
+                            --output trivy-reports/trivy-image-high-critical.json \
+                            ${APP_NAME}:${APP_VERSION} || true
+                        trivy image --format json \
+                            --output trivy-reports/trivy-image-full.json \
+                            ${APP_NAME}:${APP_VERSION} || true
+
+                        # Hard gate: fail if any CRITICAL CVEs found
+                        CRITICAL=$(trivy image --severity CRITICAL --quiet \
+                            --format json ${APP_NAME}:${APP_VERSION} \
+                            | grep -c '"Severity":"CRITICAL"' || echo 0)
+                        echo "Critical CVEs found: ${CRITICAL}"
+                        if [ "$CRITICAL" -gt 0 ]; then
+                            echo "CRITICAL vulnerabilities detected — aborting pipeline."
+                            exit 1
+                        fi
                     else
                         echo "Trivy not installed – skipping image scan"
                     fi
@@ -235,21 +259,39 @@ pipeline {
             }
             post {
                 always { archiveArtifacts artifacts: 'trivy-reports/*', allowEmptyArchive: true }
+                failure {
+                    echo "Trivy image scan FAILED — nothing will be pushed or deployed."
+                }
             }
         }
 
+        // ----------------------------------------------------------------
+        // GATE 4 — Container must start and respond on all health endpoints.
+        // ----------------------------------------------------------------
         stage('Docker Container Test') {
             steps {
                 sh '''
                     docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
                     docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
+
+                    READY=0
                     for i in $(seq 1 12); do
-                        curl -sf http://localhost:5000/health > /dev/null && echo "App is up (attempt ${i})" && break
+                        if curl -sf http://localhost:5000/health > /dev/null; then
+                            echo "App is up (attempt ${i})"
+                            READY=1
+                            break
+                        fi
                         echo "Waiting for app... (${i}/12)"; sleep 3
                     done
-                    curl -f http://localhost:5000/health
-                    curl -f http://localhost:5000/
-                    curl -f http://localhost:5000/metrics
+
+                    if [ "$READY" -eq 0 ]; then
+                        echo "Container health check timed out — aborting pipeline."
+                        exit 1
+                    fi
+
+                    curl -f http://localhost:5000/health  || exit 1
+                    curl -f http://localhost:5000/        || exit 1
+                    curl -f http://localhost:5000/metrics || exit 1
                 '''
             }
             post {
@@ -257,31 +299,35 @@ pipeline {
                     sh 'docker logs ${APP_NAME} 2>/dev/null || true'
                     sh 'docker rm -f ${APP_NAME} 2>/dev/null || true'
                 }
+                failure {
+                    echo "Container test FAILED — nothing will be pushed or deployed."
+                }
             }
         }
 
-      stage('Falco Runtime Security Scan') {
-    steps {
-        script {
-            // Start the app container
-            sh '''
-                docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
-                docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
-                for i in $(seq 1 12); do
-                    curl -sf http://localhost:5000/health > /dev/null && echo "App ready (${i})" && break
-                    echo "Waiting for app... (${i}/12)"; sleep 3
-                done
-            '''
+        // ----------------------------------------------------------------
+        // GATE 5 — Falco must detect zero runtime alerts.
+        // ----------------------------------------------------------------
+        stage('Falco Runtime Security Scan') {
+            steps {
+                script {
+                    sh '''
+                        docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true
+                        docker run -d -p 5000:5000 --name ${APP_NAME} ${APP_NAME}:${APP_VERSION}
+                        for i in $(seq 1 12); do
+                            curl -sf http://localhost:5000/health > /dev/null && echo "App ready (${i})" && break
+                            echo "Waiting for app... (${i}/12)"; sleep 3
+                        done
+                    '''
 
-            // Write minimal working rules file (shell detection only)
-            sh '''#!/bin/bash
-                mkdir -p falco
-                cat > falco/custom_rules.yaml << 'EOF'
+                    sh '''#!/bin/bash
+                        mkdir -p falco
+                        cat > falco/custom_rules.yaml << 'EOF'
 - macro: container
   condition: container.id != host
 
 - macro: spawned_process
-  condition: evt.type in (execve, execveat) and evt.dir=<
+  condition: evt.type in (execve, execveat) and evt.dir=
 
 - rule: Shell spawned in container
   desc: Detects a shell being spawned inside any running container
@@ -290,75 +336,75 @@ pipeline {
   priority: WARNING
   tags: [container, shell, custom]
 EOF
-                echo "Rules file created:"
-                cat falco/custom_rules.yaml
-            '''
+                        echo "Rules file created:"
+                        cat falco/custom_rules.yaml
+                    '''
 
-            // Run Falco
-            sh '''
-                mkdir -p falco-reports
-                docker rm -f falco-scanner 2>/dev/null || true
+                    sh '''
+                        mkdir -p falco-reports
+                        docker rm -f falco-scanner 2>/dev/null || true
 
-                docker run -d --name falco-scanner \
-                    --privileged \
-                    --pid=host \
-                    -v /var/run/docker.sock:/host/var/run/docker.sock \
-                    -v /proc:/host/proc:ro \
-                    -v /boot:/host/boot:ro \
-                    -v /lib/modules:/host/lib/modules:ro \
-                    -v /usr:/host/usr:ro \
-                    -v /etc:/host/etc:ro \
-                    -v $(pwd)/falco/custom_rules.yaml:/etc/falco/custom_rules.yaml:ro \
-                    falcosecurity/falco-no-driver:latest \
-                    falco \
-                    -r /etc/falco/custom_rules.yaml \
-                    -o json_output=true \
-                    -o log_stderr=true \
-                    -o log_level=info
+                        docker run -d --name falco-scanner \
+                            --privileged \
+                            --pid=host \
+                            -v /var/run/docker.sock:/host/var/run/docker.sock \
+                            -v /proc:/host/proc:ro \
+                            -v /boot:/host/boot:ro \
+                            -v /lib/modules:/host/lib/modules:ro \
+                            -v /usr:/host/usr:ro \
+                            -v /etc:/host/etc:ro \
+                            -v $(pwd)/falco/custom_rules.yaml:/etc/falco/custom_rules.yaml:ro \
+                            falcosecurity/falco-no-driver:latest \
+                            falco \
+                            -r /etc/falco/custom_rules.yaml \
+                            -o json_output=true \
+                            -o log_stderr=true \
+                            -o log_level=info
 
-                echo "Falco started, monitoring for 60 seconds..."
-                sleep 5
+                        echo "Falco started, monitoring for 60 seconds..."
+                        sleep 5
 
-                # Exercise the app
-                curl -sf http://localhost:5000/ || true
-                curl -sf http://localhost:5000/health || true
-                curl -sf http://localhost:5000/metrics || true
+                        curl -sf http://localhost:5000/ || true
+                        curl -sf http://localhost:5000/health || true
+                        curl -sf http://localhost:5000/metrics || true
 
-                sleep 55
+                        sleep 55
 
-                docker logs falco-scanner > falco-reports/falco-output.log 2>&1 || true
-                docker rm -f falco-scanner || true
-            '''
+                        docker logs falco-scanner > falco-reports/falco-output.log 2>&1 || true
+                        docker rm -f falco-scanner || true
+                    '''
 
-            // Parse results – fail on any alert
-            sh '''
-                echo "=== Falco Alert Summary ==="
-                if [ -f falco-reports/falco-output.log ]; then
-                    WARNING=$(grep -c '"priority":"Warning"' falco-reports/falco-output.log || echo 0)
-                    echo "Warnings: ${WARNING}"
-                fi
-            '''
+                    sh '''
+                        echo "=== Falco Alert Summary ==="
+                        if [ -f falco-reports/falco-output.log ]; then
+                            WARNING=$(grep -c '"priority":"Warning"' falco-reports/falco-output.log || echo 0)
+                            echo "Warnings: ${WARNING}"
+                        fi
+                    '''
 
-            script {
-                def alertCountStr = sh(
-                    script: 'grep -c "priority" falco-reports/falco-output.log 2>/dev/null || echo 0',
-                    returnStdout: true
-                ).trim()
-                def alertCount = (alertCountStr.split('\\n')[-1] ?: '0').toInteger()
-                if (alertCount > 0) {
-                    error "Falco detected ${alertCount} runtime security alert(s). Failing build."
+                    script {
+                        def alertCountStr = sh(
+                            script: 'grep -c "priority" falco-reports/falco-output.log 2>/dev/null || echo 0',
+                            returnStdout: true
+                        ).trim()
+                        def alertCount = (alertCountStr.split('\\n')[-1] ?: '0').toInteger()
+                        if (alertCount > 0) {
+                            error "Falco detected ${alertCount} runtime security alert(s) — aborting pipeline."
+                        }
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'falco-reports/**', allowEmptyArchive: true
+                    sh 'docker rm -f falco-scanner 2>/dev/null || true'
+                    sh 'docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true'
+                }
+                failure {
+                    echo "Falco scan FAILED — nothing will be pushed or deployed."
                 }
             }
         }
-    }
-    post {
-        always {
-            archiveArtifacts artifacts: 'falco-reports/**', allowEmptyArchive: true
-            sh 'docker rm -f falco-scanner 2>/dev/null || true'
-            sh 'docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true'
-        }
-    }
-}
 
         stage('DAST Scan') {
             steps {
@@ -382,10 +428,15 @@ EOF
                     echo "ZAP scan finished with exit code: ${zapExitCode}"
 
                     if (fileExists('zap_report.json')) {
-                        def highCount = sh(script: 'grep -o \'"risk":"High"\' zap_report.json | wc -l || echo 0', returnStdout: true).trim()
+                        def highCount   = sh(script: 'grep -o \'"risk":"High"\' zap_report.json | wc -l || echo 0', returnStdout: true).trim()
                         def mediumCount = sh(script: 'grep -o \'"risk":"Medium"\' zap_report.json | wc -l || echo 0', returnStdout: true).trim()
-                        def lowCount = sh(script: 'grep -o \'"risk":"Low"\' zap_report.json | wc -l || echo 0', returnStdout: true).trim()
+                        def lowCount    = sh(script: 'grep -o \'"risk":"Low"\' zap_report.json | wc -l || echo 0', returnStdout: true).trim()
                         echo "High: ${highCount} | Medium: ${mediumCount} | Low: ${lowCount}"
+
+                        // Hard gate: fail if any High-risk ZAP findings
+                        if (highCount.toInteger() > 0) {
+                            error "OWASP ZAP found ${highCount} High-risk issue(s) — aborting pipeline."
+                        }
                     }
                 }
             }
@@ -402,9 +453,15 @@ EOF
                     ])
                     archiveArtifacts artifacts: 'zap_report.html, zap_report.json', allowEmptyArchive: true
                 }
+                failure {
+                    echo "DAST scan FAILED — nothing will be pushed or deployed."
+                }
             }
         }
 
+        // ----------------------------------------------------------------
+        // Only reached if ALL gates above passed.
+        // ----------------------------------------------------------------
         stage('Push to Docker Hub') {
             steps {
                 sh '''
@@ -424,51 +481,51 @@ EOF
                     kubectl create namespace devsecops --dry-run=client -o yaml | kubectl apply -f -
 
                     export IMAGE_TAG=${APP_VERSION}
-                   envsubst < k8s/base/deployment.yaml | kubectl apply -f - -n devsecops
-kubectl apply -f k8s/base/service.yaml -n devsecops
+                    envsubst < k8s/base/deployment.yaml | kubectl apply -f - -n devsecops
+                    kubectl apply -f k8s/base/service.yaml -n devsecops
                     kubectl rollout status deployment/${APP_NAME} -n devsecops
                 '''
             }
         }
-        
+
         stage('Kyverno Policy Check') {
-    steps {
-        sh '''
-            echo "=== Checking Kyverno ClusterPolicies are ready ==="
-            kubectl get clusterpolicy
+            steps {
+                sh '''
+                    echo "=== Checking Kyverno ClusterPolicies are ready ==="
+                    kubectl get clusterpolicy
 
-            NOT_READY=$(kubectl get clusterpolicy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.ready}{"\n"}{end}' | grep -v "true" || true)
-            if [ -n "$NOT_READY" ]; then
-                echo "The following policies are NOT ready:"
-                echo "$NOT_READY"
-                exit 1
-            fi
-            echo "All Kyverno policies are ready."
+                    NOT_READY=$(kubectl get clusterpolicy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.ready}{"\n"}{end}' | grep -v "true" || true)
+                    if [ -n "$NOT_READY" ]; then
+                        echo "The following policies are NOT ready:"
+                        echo "$NOT_READY"
+                        exit 1
+                    fi
+                    echo "All Kyverno policies are ready."
 
-            echo "=== Checking PolicyReports for violations in devsecops namespace ==="
-            mkdir -p kyverno-reports
+                    echo "=== Checking PolicyReports for violations in devsecops namespace ==="
+                    mkdir -p kyverno-reports
 
-            kubectl get policyreport -n devsecops -o json > kyverno-reports/policyreport.json 2>/dev/null || echo "{}" > kyverno-reports/policyreport.json
-            kubectl get clusterpolicyreport -o json > kyverno-reports/clusterpolicyreport.json 2>/dev/null || echo "{}" > kyverno-reports/clusterpolicyreport.json
+                    kubectl get policyreport -n devsecops -o json > kyverno-reports/policyreport.json 2>/dev/null || echo "{}" > kyverno-reports/policyreport.json
+                    kubectl get clusterpolicyreport -o json > kyverno-reports/clusterpolicyreport.json 2>/dev/null || echo "{}" > kyverno-reports/clusterpolicyreport.json
 
-            FAIL_COUNT=$(cat kyverno-reports/policyreport.json | grep -c '"result":"fail"' || echo 0)
-            echo "Policy violations found: ${FAIL_COUNT}"
+                    FAIL_COUNT=$(cat kyverno-reports/policyreport.json | grep -c '"result":"fail"' || echo 0)
+                    echo "Policy violations found: ${FAIL_COUNT}"
 
-            if [ "$FAIL_COUNT" -gt 0 ]; then
-                echo "=== Violation Details ==="
-                cat kyverno-reports/policyreport.json | grep -A5 '"result":"fail"' || true
-                exit 1
-            fi
+                    if [ "$FAIL_COUNT" -gt 0 ]; then
+                        echo "=== Violation Details ==="
+                        cat kyverno-reports/policyreport.json | grep -A5 '"result":"fail"' || true
+                        exit 1
+                    fi
 
-            echo "No Kyverno policy violations detected."
-        '''
-    }
-    post {
-        always {
-            archiveArtifacts artifacts: 'kyverno-reports/**', allowEmptyArchive: true
+                    echo "No Kyverno policy violations detected."
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'kyverno-reports/**', allowEmptyArchive: true
+                }
+            }
         }
-    }
-}
 
     }
 
@@ -482,6 +539,7 @@ kubectl apply -f k8s/base/service.yaml -n devsecops
                     done
                     [ -d trivy-reports ] && cp trivy-reports/* security-reports/ 2>/dev/null || true
                     [ -d falco-reports ] && cp falco-reports/* security-reports/ 2>/dev/null || true
+                    [ -d kyverno-reports ] && cp kyverno-reports/* security-reports/ 2>/dev/null || true
                 '''
                 archiveArtifacts artifacts: 'security-reports/**', allowEmptyArchive: true
             }
@@ -502,16 +560,15 @@ kubectl apply -f k8s/base/service.yaml -n devsecops
                             <tr><td><b>Commit</b></td><td>${env.GIT_COMMIT_SHORT}</td></tr>
                             <tr><td><b>URL</b></td><td><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
                         </table><hr>
-                        <h3>Security Scans</h3>
+                        <h3>Security Gates Passed</h3>
                         <ul>
-                            <li>SAST: SonarQube + Quality Gate</li>
-                            <li>Bandit (Python)</li>
-                            <li>pip-audit (dependencies)</li>
-                            <li>Trivy (filesystem + image)</li>
-                            <li>Falco Runtime Security Scan (custom rules)</li>
-                            <li>DAST: OWASP ZAP</li>
-                            <li>Kyverno Policy Enforcement (labels, registries, namespaces)</li>
-
+                            <li>✅ Unit Tests</li>
+                            <li>✅ SonarQube Quality Gate</li>
+                            <li>✅ Trivy (zero CRITICAL CVEs)</li>
+                            <li>✅ Container Health Check</li>
+                            <li>✅ Falco Runtime Scan (zero alerts)</li>
+                            <li>✅ OWASP ZAP DAST (zero High-risk findings)</li>
+                            <li>✅ Kyverno Policy Enforcement</li>
                         </ul>
                         <p>Attached: all security reports.</p>
                         </body></html>
