@@ -2,8 +2,7 @@
 SecureBank — single-file Flask banking demo.
 
 Run:
-    pip install flask flask-sqlalchemy flask-jwt-extended flask-bcrypt \
-                flask-talisman flask-limiter marshmallow prometheus-flask-exporter
+    pip install -r requirements.txt
     python app.py
 
 Then open http://localhost:5000
