@@ -227,7 +227,9 @@ def create_app(config_name=None):
     )
 
     metrics = PrometheusMetrics(app)
-    metrics.info("securebank_app_info", "SecureBank application info", version="1.0.0")
+    # FIX: skip metrics.info() during testing to avoid duplicate registration
+    if not app.config.get("TESTING", False):
+        metrics.info("securebank_app_info", "SecureBank application info", version="1.0.0")
 
     @jwt.token_in_blocklist_loader
     def check_blocklist(jwt_header, jwt_payload):
@@ -1091,7 +1093,8 @@ function renderTx(){
       <td><span class="badge ${t.type}">${t.type}</span></td>
       <td>${fmtMoney(t.amount)}</td>
       <td><span class="badge ${t.status}">${t.status}</span></td>
-      <td>${d}</td></tr>`;
+      <td>${d}</td>
+    </tr>`;
   }).join('');
 }
 
@@ -1223,4 +1226,3 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
-
