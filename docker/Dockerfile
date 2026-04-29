@@ -1,16 +1,35 @@
-FROM python:3.11-slim
+# Use Python 3.12 slim (actively maintained, fixes most Python 3.11 weaknesses)
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install production dependencies only
+# ============================================================================
+# Fix Debian system CVEs (glibc and tar)
+#   - glibc: CVE-2026-5435, CVE-2026-6238, CVE-2018-20796,
+#            CVE-2019-1010024, CVE-2019-1010025
+#   - tar: CVE-2025-45582
+# ============================================================================
+RUN apt-get update && \
+    apt-get upgrade -y libc6 tar && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# ============================================================================
+# Upgrade pip and wheel to fix Python‑tool CVEs
+#   - pip: CVE-2025-8869, CVE-2026-3219, CVE-2026-1703
+#   - wheel: CVE-2026-24049
+# ============================================================================
+RUN pip install --no-cache-dir --upgrade pip wheel
+
+# Copy and install production dependencies (all Python CVEs already fixed in requirements.txt)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install gunicorn
 
-# Copy application
+# Copy application code (assumes app.py is inside app/ directory)
 COPY app/ app/
 
-# Create non-root user
+# Create non‑root user
 RUN adduser --system --group appuser && \
     chown -R appuser:appuser /app
 
@@ -24,8 +43,9 @@ ENV PYTHONPATH=/app \
 
 EXPOSE 5000
 
+# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" || exit 1
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" || exit 1
 
-# Use gunicorn for production
+# Run with gunicorn
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--worker-class", "sync", "app.app:app"]

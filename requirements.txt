@@ -1,11 +1,11 @@
 # ===== Core Web Framework =====
 Flask==3.1.3
-Werkzeug==3.1.4
+Werkzeug==3.1.6
 gunicorn==23.0.0
 gevent==24.11.1
 greenlet==3.1.1
 python-dotenv==1.2.2
-requests==2.32.4
+requests==2.32.5
 
 # ===== Database & Migrations =====
 Flask-SQLAlchemy==3.1.1
@@ -14,25 +14,24 @@ alembic==1.13.3
 psycopg2-binary==2.9.10
 SQLAlchemy==2.0.36
 
-# ===== Authentication & Password Hashing =====
+# ===== Authentication =====
 Flask-JWT-Extended==4.7.1
 flask-bcrypt==1.0.1
-# PyJWT intentionally unpinned — resolved transitively by Flask-JWT-Extended
 
-# ===== Security & Hardening =====
+# ===== Security =====
 Flask-Talisman==1.1.0
 Flask-Cors==6.0.0
 Flask-WTF==1.2.2
 bleach==6.2.0
 
-# ===== Rate Limiting (Redis-backed for multi-worker) =====
+# ===== Rate Limiting =====
 Flask-Limiter==3.12.0
 limits[redis]==3.13.0
 redis==5.2.1
 hiredis==3.1.0
 
 # ===== Validation =====
-marshmallow==3.23.1
+marshmallow==3.24.0
 email-validator==2.2.0
 
 # ===== Observability =====
