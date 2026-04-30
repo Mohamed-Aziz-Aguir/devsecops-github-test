@@ -8,9 +8,17 @@ WORKDIR /app
 RUN apk update && apk upgrade && rm -rf /var/cache/apk/*
 
 # ============================================================================
-# Install build dependencies for psycopg2 (postgresql-dev, gcc, musl-dev)
+# Install full build toolchain and gevent dependencies
+#   - gcc, g++, musl-dev, make (compilers and build tools)
+#   - file, libffi-dev, openssl-dev (for various Python packages)
+#   - libev-dev, c-ares-dev (for gevent's libev and c-ares)
+#   - postgresql-dev (for psycopg2)
 # ============================================================================
-RUN apk add --no-cache postgresql-dev gcc musl-dev
+RUN apk add --no-cache \
+    gcc g++ musl-dev make \
+    file libffi-dev openssl-dev \
+    libev-dev c-ares-dev \
+    postgresql-dev
 
 # ============================================================================
 # Upgrade pip and wheel
