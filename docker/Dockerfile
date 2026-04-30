@@ -1,11 +1,12 @@
-FROM python:3.13-alpine
+# Use Python 3.13 on Alpine 3.21 (latest stable)
+FROM python:3.13-alpine3.21
 
 WORKDIR /app
 
-# Upgrade Alpine system packages
+# Upgrade all Alpine system packages to latest available versions
 RUN apk update && apk upgrade && rm -rf /var/cache/apk/*
 
-# Install build dependencies for greenlet/gevent/psycopg2
+# Install build dependencies (required for compiling some Python packages)
 RUN apk add --no-cache \
     gcc g++ musl-dev make \
     file libffi-dev openssl-dev \
@@ -15,10 +16,18 @@ RUN apk add --no-cache \
 # Upgrade pip and wheel
 RUN pip install --no-cache-dir --upgrade pip wheel
 
-# Copy and install Python dependencies
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install gunicorn
+
+# ============================================================================
+# OPTIONAL: Remove build dependencies to reduce image size and CVEs
+# Uncomment the following lines if you want to uninstall the build toolchain
+# ============================================================================
+# RUN apk del --no-cache gcc g++ musl-dev make file libffi-dev openssl-dev \
+#     libev-dev c-ares-dev postgresql-dev && \
+#     rm -rf /var/cache/apk/*
 
 # Copy application code
 COPY app/ app/
