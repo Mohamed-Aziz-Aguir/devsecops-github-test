@@ -3,20 +3,21 @@ FROM python:3.14-alpine
 WORKDIR /app
 
 # ============================================================================
-# Upgrade all Alpine system packages (fixes Alpine CVEs)
+# Upgrade Alpine system packages
 # ============================================================================
 RUN apk update && apk upgrade && rm -rf /var/cache/apk/*
 
 # ============================================================================
-# Upgrade pip and wheel to fix Python‑tool CVEs
+# Install build dependencies for psycopg2 (postgresql-dev, gcc, musl-dev)
+# ============================================================================
+RUN apk add --no-cache postgresql-dev gcc musl-dev
+
+# ============================================================================
+# Upgrade pip and wheel
 # ============================================================================
 RUN pip install --no-cache-dir --upgrade pip wheel
 
-# Install system dependencies required for some Python packages (e.g., psycopg2)
-# psycopg2-binary works on Alpine, but if you switch to psycopg2, uncomment:
-# RUN apk add --no-cache postgresql-dev gcc musl-dev
-
-# Copy and install production dependencies
+# Copy and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install gunicorn
@@ -24,7 +25,7 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 # Copy application code
 COPY app/ app/
 
-# Create non‑root user (Alpine syntax)
+# Create non‑root user
 RUN addgroup -g 1001 -S appuser && \
     adduser -S -u 1001 -G appuser appuser && \
     chown -R appuser:appuser /app
