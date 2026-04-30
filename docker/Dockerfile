@@ -1,28 +1,18 @@
-FROM python:3.14-alpine
+FROM python:3.13-alpine
 
 WORKDIR /app
 
-# ============================================================================
 # Upgrade Alpine system packages
-# ============================================================================
 RUN apk update && apk upgrade && rm -rf /var/cache/apk/*
 
-# ============================================================================
-# Install full build toolchain and gevent dependencies
-#   - gcc, g++, musl-dev, make (compilers and build tools)
-#   - file, libffi-dev, openssl-dev (for various Python packages)
-#   - libev-dev, c-ares-dev (for gevent's libev and c-ares)
-#   - postgresql-dev (for psycopg2)
-# ============================================================================
+# Install build dependencies for greenlet/gevent/psycopg2
 RUN apk add --no-cache \
     gcc g++ musl-dev make \
     file libffi-dev openssl-dev \
     libev-dev c-ares-dev \
     postgresql-dev
 
-# ============================================================================
 # Upgrade pip and wheel
-# ============================================================================
 RUN pip install --no-cache-dir --upgrade pip wheel
 
 # Copy and install Python dependencies
