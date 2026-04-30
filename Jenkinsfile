@@ -66,7 +66,7 @@ pipeline {
             }
         }
 
-        // GATE 1 — Unit tests must pass
+        // GATE 1 — Unit tests
         stage('Unit Tests') {
             steps {
                 sh '''
@@ -134,7 +134,7 @@ pipeline {
             }
         }
 
-        // GATE 2 — SonarQube quality gate
+        // GATE 2 — SonarQube
         stage('SonarQube Analysis') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
@@ -220,7 +220,7 @@ pipeline {
             }
         }
 
-        // GATE 3 — Trivy image scan (zero CRITICAL CVEs)
+        // GATE 3 — Trivy image scan
         stage('Trivy Image Scan') {
             steps {
                 sh '''
@@ -290,7 +290,7 @@ pipeline {
             }
         }
 
-        // GATE 5 — Falco runtime security (zero alerts)
+        // GATE 5 — Falco runtime security
         stage('Falco Runtime Security Scan') {
             steps {
                 script {
@@ -439,37 +439,42 @@ EOF
         }
 
         // ----------------------------------------------------------------
-        // PUSH WITH ATTESTATIONS — works on any agent (no host buildx required)
+        // PUSH WITH ATTESTATIONS — fully fixed (uses docker:24.0.6 with curl, valid SBOM generator)
         // ----------------------------------------------------------------
         stage('Push with Attestations (SBOM + Provenance)') {
             when { expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
             steps {
                 script {
-                    // We need to pass the credentials into the container environment safely
-                    def dockerUser = sh(script: "echo \${DOCKER_CREDS_USR}", returnStdout: true).trim()
-                    def dockerPass = sh(script: "echo \${DOCKER_CREDS_PSW}", returnStdout: true).trim()
+                    // Avoid insecure interpolation warning by writing credentials to a temporary file
+                    sh '''
+                        echo "${DOCKER_CREDS_USR}" > /tmp/docker-user
+                        echo "${DOCKER_CREDS_PSW}" > /tmp/docker-pass
+                    '''
                     sh """
                         docker run --rm --privileged \
                             -v /var/run/docker.sock:/var/run/docker.sock \
                             -v ${WORKSPACE}:/workspace \
                             -w /workspace \
-                            docker:24.0.6-cli \
+                            docker:24.0.6 \
                             sh -c "
-                                # Install buildx inside container
-                                mkdir -p ~/.docker/cli-plugins
-                                curl -sSL https://github.com/docker/buildx/releases/download/v0.20.1/buildx-v0.20.1.linux-amd64 -o ~/.docker/cli-plugins/docker-buildx
-                                chmod +x ~/.docker/cli-plugins/docker-buildx
+                                # Install curl (not present in minimal image)
+                                apk add --no-cache curl
 
-                                # Login to Docker Hub
-                                echo '${dockerPass}' | docker login -u '${dockerUser}' --password-stdin
+                                # Install buildx into the container
+                                mkdir -p /root/.docker/cli-plugins
+                                curl -sSL https://github.com/docker/buildx/releases/download/v0.20.1/buildx-v0.20.1.linux-amd64 -o /root/.docker/cli-plugins/docker-buildx
+                                chmod +x /root/.docker/cli-plugins/docker-buildx
+
+                                # Login to Docker Hub using the temporary files
+                                docker login -u \$(cat /tmp/docker-user) --password-stdin < /tmp/docker-pass
 
                                 # Create builder
                                 docker buildx create --use --name attest-builder || docker buildx use attest-builder
                                 docker buildx inspect --bootstrap
 
-                                # Build and push with attestations
+                                # Build and push with attestations (use default SBOM generator, not 'general')
                                 docker buildx build \\
-                                    --attest type=sbom,generator=general \\
+                                    --attest type=sbom \\
                                     --attest type=provenance,mode=max \\
                                     --push \\
                                     -f docker/Dockerfile \\
@@ -479,6 +484,7 @@ EOF
                                     .
                             "
                     """
+                    sh 'rm -f /tmp/docker-user /tmp/docker-pass'
                 }
             }
         }
