@@ -15,8 +15,7 @@ pipeline {
 
         PATH             = "/opt/sonar-scanner/bin:${env.PATH}"
         
-        // Enable BuildKit for attestations
-        DOCKER_BUILDKIT  = "1"
+        // DOCKER_BUILDKIT removed – only needed inside the attestation container
     }
 
     options {
