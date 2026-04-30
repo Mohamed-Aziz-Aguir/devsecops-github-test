@@ -1,38 +1,36 @@
-# Use Python 3.12 slim (actively maintained, fixes Python 3.11 weaknesses)
-FROM python:3.12-slim
+FROM python:3.14-alpine
 
 WORKDIR /app
 
 # ============================================================================
-# Fix ALL Debian system CVEs (glibc, tar, openssl, ca-certificates, etc.)
+# Upgrade all Alpine system packages (fixes Alpine CVEs)
 # ============================================================================
-RUN apt-get update && \
-    apt-get upgrade -y && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk update && apk upgrade && rm -rf /var/cache/apk/*
 
 # ============================================================================
 # Upgrade pip and wheel to fix Python‑tool CVEs
-#   - pip: CVE-2025-8869, CVE-2026-3219, CVE-2026-1703
-#   - wheel: CVE-2026-24049
 # ============================================================================
 RUN pip install --no-cache-dir --upgrade pip wheel
 
-# Copy and install production dependencies (all Python CVEs already fixed)
+# Install system dependencies required for some Python packages (e.g., psycopg2)
+# psycopg2-binary works on Alpine, but if you switch to psycopg2, uncomment:
+# RUN apk add --no-cache postgresql-dev gcc musl-dev
+
+# Copy and install production dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install gunicorn
 
-# Copy application code (assumes app.py is inside app/ directory)
+# Copy application code
 COPY app/ app/
 
-# Create non‑root user
-RUN adduser --system --group appuser && \
+# Create non‑root user (Alpine syntax)
+RUN addgroup -g 1001 -S appuser && \
+    adduser -S -u 1001 -G appuser appuser && \
     chown -R appuser:appuser /app
 
 USER appuser
 
-# Environment variables
 ENV PYTHONPATH=/app \
     HOST=0.0.0.0 \
     PORT=5000 \
@@ -40,9 +38,7 @@ ENV PYTHONPATH=/app \
 
 EXPOSE 5000
 
-# Health check (python3 is available in slim image)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" || exit 1
 
-# Run with gunicorn (production)
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--worker-class", "sync", "app.app:app"]
