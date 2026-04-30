@@ -1,19 +1,20 @@
-# Use Python 3.13 on Alpine 3.21 (latest stable)
-FROM python:3.13-alpine3.21
+# ---- Build Stage ----
+FROM python:3.14-alpine AS builder
 
 WORKDIR /app
 
-# Upgrade all Alpine system packages to latest available versions
-RUN apk update && apk upgrade && rm -rf /var/cache/apk/*
+# Temporarily add edge-main repository to get the latest patched packages
+RUN echo "http://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories
 
-# Install build dependencies (required for compiling some Python packages)
-RUN apk add --no-cache \
-    gcc g++ musl-dev make \
-    file libffi-dev openssl-dev \
-    libev-dev c-ares-dev \
-    postgresql-dev
+# Update system and install required build dependencies
+RUN apk update && apk upgrade && \
+    apk add --no-cache --virtual .build-deps \
+        gcc g++ musl-dev make \
+        file libffi-dev openssl-dev \
+        libev-dev c-ares-dev \
+        postgresql-dev
 
-# Upgrade pip and wheel
+# Upgrade pip and prepare environment
 RUN pip install --no-cache-dir --upgrade pip wheel
 
 # Install Python dependencies
@@ -21,13 +22,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install gunicorn
 
-# ============================================================================
-# OPTIONAL: Remove build dependencies to reduce image size and CVEs
-# Uncomment the following lines if you want to uninstall the build toolchain
-# ============================================================================
-# RUN apk del --no-cache gcc g++ musl-dev make file libffi-dev openssl-dev \
-#     libev-dev c-ares-dev postgresql-dev && \
-#     rm -rf /var/cache/apk/*
+# ---- Final Stage ----
+FROM python:3.14-alpine
+
+WORKDIR /app
+
+# Copy only the installed Python packages from the builder
+COPY --from=builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY app/ app/
