@@ -439,52 +439,48 @@ EOF
         }
 
         // ----------------------------------------------------------------
-        // PUSH WITH ATTESTATIONS — fully fixed (uses docker:24.0.6 with curl, valid SBOM generator)
+        // FIXED: Push with Attestations (SBOM + Provenance)
         // ----------------------------------------------------------------
         stage('Push with Attestations (SBOM + Provenance)') {
             when { expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
             steps {
                 script {
-                    // Avoid insecure interpolation warning by writing credentials to a temporary file
-                    sh '''
-                        echo "${DOCKER_CREDS_USR}" > /tmp/docker-user
-                        echo "${DOCKER_CREDS_PSW}" > /tmp/docker-pass
-                    '''
-                    sh """
-                        docker run --rm --privileged \
-                            -v /var/run/docker.sock:/var/run/docker.sock \
-                            -v ${WORKSPACE}:/workspace \
-                            -w /workspace \
-                            docker:24.0.6 \
-                            sh -c "
-                                # Install curl (not present in minimal image)
-                                apk add --no-cache curl
+                    withEnv([
+                        "DOCKER_USER=${DOCKER_CREDS_USR}",
+                        "DOCKER_PASS=${DOCKER_CREDS_PSW}"
+                    ]) {
+                        sh '''
+                            docker run --rm --privileged \
+                                -v /var/run/docker.sock:/var/run/docker.sock \
+                                -v ${WORKSPACE}:/workspace \
+                                -w /workspace \
+                                -e DOCKER_USER \
+                                -e DOCKER_PASS \
+                                docker:24.0.6 \
+                                sh -c "
+                                    apk add --no-cache curl
 
-                                # Install buildx into the container
-                                mkdir -p /root/.docker/cli-plugins
-                                curl -sSL https://github.com/docker/buildx/releases/download/v0.20.1/buildx-v0.20.1.linux-amd64 -o /root/.docker/cli-plugins/docker-buildx
-                                chmod +x /root/.docker/cli-plugins/docker-buildx
+                                    mkdir -p /root/.docker/cli-plugins
+                                    curl -sSL https://github.com/docker/buildx/releases/download/v0.20.1/buildx-v0.20.1.linux-amd64 -o /root/.docker/cli-plugins/docker-buildx
+                                    chmod +x /root/.docker/cli-plugins/docker-buildx
 
-                                # Login to Docker Hub using the temporary files
-                                docker login -u \$(cat /tmp/docker-user) --password-stdin < /tmp/docker-pass
+                                    echo \\\$DOCKER_PASS | docker login -u \\\$DOCKER_USER --password-stdin
 
-                                # Create builder
-                                docker buildx create --use --name attest-builder || docker buildx use attest-builder
-                                docker buildx inspect --bootstrap
+                                    docker buildx create --use --name attest-builder || docker buildx use attest-builder
+                                    docker buildx inspect --bootstrap
 
-                                # Build and push with attestations (use default SBOM generator, not 'general')
-                                docker buildx build \\
-                                    --attest type=sbom \\
-                                    --attest type=provenance,mode=max \\
-                                    --push \\
-                                    -f docker/Dockerfile \\
-                                    -t ${DOCKER_IMAGE}:${APP_VERSION} \\
-                                    -t ${DOCKER_IMAGE}:latest \\
-                                    -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \\
-                                    .
-                            "
-                    """
-                    sh 'rm -f /tmp/docker-user /tmp/docker-pass'
+                                    docker buildx build \\
+                                        --attest type=sbom \\
+                                        --attest type=provenance,mode=max \\
+                                        --push \\
+                                        -f docker/Dockerfile \\
+                                        -t ${DOCKER_IMAGE}:${APP_VERSION} \\
+                                        -t ${DOCKER_IMAGE}:latest \\
+                                        -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \\
+                                        .
+                                "
+                        '''
+                    }
                 }
             }
         }
