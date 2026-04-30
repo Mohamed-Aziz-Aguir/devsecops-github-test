@@ -66,9 +66,7 @@ pipeline {
             }
         }
 
-        // ----------------------------------------------------------------
-        // GATE 1 — Unit tests must pass
-        // ----------------------------------------------------------------
+        // GATE 1 — Unit tests
         stage('Unit Tests') {
             steps {
                 sh '''
@@ -93,9 +91,7 @@ pipeline {
                         alwaysLinkToLastBuild: false
                     ])
                 }
-                failure {
-                    echo "Unit tests FAILED — aborting pipeline. Nothing will be pushed or deployed."
-                }
+                failure { echo "Unit tests FAILED — aborting pipeline." }
             }
         }
 
@@ -138,9 +134,7 @@ pipeline {
             }
         }
 
-        // ----------------------------------------------------------------
-        // GATE 2 — SonarQube quality gate
-        // ----------------------------------------------------------------
+        // GATE 2 — SonarQube
         stage('SonarQube Analysis') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
@@ -226,9 +220,7 @@ pipeline {
             }
         }
 
-        // ----------------------------------------------------------------
-        // GATE 3 — Trivy image scan (zero CRITICAL CVEs)
-        // ----------------------------------------------------------------
+        // GATE 3 — Trivy image scan
         stage('Trivy Image Scan') {
             steps {
                 sh '''
@@ -262,9 +254,7 @@ pipeline {
             }
         }
 
-        // ----------------------------------------------------------------
         // GATE 4 — Container health check
-        // ----------------------------------------------------------------
         stage('Docker Container Test') {
             steps {
                 sh '''
@@ -300,9 +290,7 @@ pipeline {
             }
         }
 
-        // ----------------------------------------------------------------
-        // GATE 5 — Falco runtime security (zero alerts)
-        // ----------------------------------------------------------------
+        // GATE 5 — Falco runtime security
         stage('Falco Runtime Security Scan') {
             steps {
                 script {
@@ -399,9 +387,7 @@ EOF
             }
         }
 
-        // ----------------------------------------------------------------
         // GATE 6 — DAST (OWASP ZAP)
-        // ----------------------------------------------------------------
         stage('DAST Scan') {
             steps {
                 script {
@@ -453,35 +439,40 @@ EOF
         }
 
         // ----------------------------------------------------------------
-        // Push with SBOM + Provenance attestations (max mode)
-        // Uses docker/buildx:latest (full image with shell)
+        // PUSH WITH ATTESTATIONS (fixed: installs buildx on host)
         // ----------------------------------------------------------------
         stage('Push with Attestations (SBOM + Provenance)') {
             when { expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
             steps {
                 sh '''
+                    # Install docker-buildx plugin on the host if missing
+                    mkdir -p ~/.docker/cli-plugins
+                    if [ ! -f ~/.docker/cli-plugins/docker-buildx ]; then
+                        curl -sSL https://github.com/docker/buildx/releases/download/v0.20.1/buildx-v0.20.1.linux-amd64 -o ~/.docker/cli-plugins/docker-buildx
+                        chmod +x ~/.docker/cli-plugins/docker-buildx
+                    fi
+                    docker buildx version
+
+                    # Enable BuildKit for this build
+                    export DOCKER_BUILDKIT=1
+
                     # Login to Docker Hub
                     echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
 
-                    # Use official buildx container (with shell) to push with attestations
-                    docker run --rm --privileged \
-                        -v /var/run/docker.sock:/var/run/docker.sock \
-                        -v ${WORKSPACE}:/workspace \
-                        -w /workspace \
-                        docker/buildx:latest \
-                        sh -c "
-                            docker buildx create --use --name attest-builder || docker buildx use attest-builder
-                            docker buildx inspect --bootstrap
-                            docker buildx build \
-                                --attest type=sbom,generator=general \
-                                --attest type=provenance,mode=max \
-                                --push \
-                                -f docker/Dockerfile \
-                                -t ${DOCKER_IMAGE}:${APP_VERSION} \
-                                -t ${DOCKER_IMAGE}:latest \
-                                -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \
-                                .
-                        "
+                    # Create and bootstrap a builder (if not exists)
+                    docker buildx create --use --name attest-builder || docker buildx use attest-builder
+                    docker buildx inspect --bootstrap
+
+                    # Build and push with attestations
+                    docker buildx build \
+                        --attest type=sbom,generator=general \
+                        --attest type=provenance,mode=max \
+                        --push \
+                        -f docker/Dockerfile \
+                        -t ${DOCKER_IMAGE}:${APP_VERSION} \
+                        -t ${DOCKER_IMAGE}:latest \
+                        -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \
+                        .
 
                     docker logout
                 '''
@@ -538,7 +529,6 @@ EOF
                 always { archiveArtifacts artifacts: 'kyverno-reports/**', allowEmptyArchive: true }
             }
         }
-
     }
 
     post {
