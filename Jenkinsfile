@@ -14,8 +14,6 @@ pipeline {
         DOCKER_CREDS     = credentials('Docker-Hub')
 
         PATH             = "/opt/sonar-scanner/bin:${env.PATH}"
-        
-        // DOCKER_BUILDKIT removed – only needed inside the attestation container
     }
 
     options {
@@ -456,7 +454,7 @@ EOF
 
         // ----------------------------------------------------------------
         // Push with SBOM + Provenance attestations (max mode)
-        // Uses docker/buildx-bin container to avoid host buildx dependency
+        // Uses docker/buildx:latest (full image with shell)
         // ----------------------------------------------------------------
         stage('Push with Attestations (SBOM + Provenance)') {
             when { expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
@@ -465,12 +463,12 @@ EOF
                     # Login to Docker Hub
                     echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
 
-                    # Use official buildx container to push with attestations
+                    # Use official buildx container (with shell) to push with attestations
                     docker run --rm --privileged \
                         -v /var/run/docker.sock:/var/run/docker.sock \
                         -v ${WORKSPACE}:/workspace \
                         -w /workspace \
-                        docker/buildx-bin:latest \
+                        docker/buildx:latest \
                         sh -c "
                             docker buildx create --use --name attest-builder || docker buildx use attest-builder
                             docker buildx inspect --bootstrap
