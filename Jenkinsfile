@@ -70,7 +70,7 @@ pipeline {
         }
 
         // ----------------------------------------------------------------
-        // GATE 1 — Unit tests must pass. Pipeline stops here on failure.
+        // GATE 1 — Unit tests must pass
         // ----------------------------------------------------------------
         stage('Unit Tests') {
             steps {
@@ -142,7 +142,7 @@ pipeline {
         }
 
         // ----------------------------------------------------------------
-        // GATE 2 — SonarQube quality gate must be OK.
+        // GATE 2 — SonarQube quality gate
         // ----------------------------------------------------------------
         stage('SonarQube Analysis') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
@@ -230,7 +230,7 @@ pipeline {
         }
 
         // ----------------------------------------------------------------
-        // GATE 3 — Trivy must find zero CRITICAL vulnerabilities in the image.
+        // GATE 3 — Trivy image scan (zero CRITICAL CVEs)
         // ----------------------------------------------------------------
         stage('Trivy Image Scan') {
             steps {
@@ -246,7 +246,6 @@ pipeline {
                             --output trivy-reports/trivy-image-full.json \
                             ${APP_NAME}:${APP_VERSION} || true
 
-                        # Hard gate: fail if any CRITICAL CVEs found
                         CRITICAL=$(trivy image --severity CRITICAL --quiet \
                             --format json ${APP_NAME}:${APP_VERSION} \
                             | grep -c '"Severity":"CRITICAL"' || echo 0)
@@ -262,14 +261,12 @@ pipeline {
             }
             post {
                 always { archiveArtifacts artifacts: 'trivy-reports/*', allowEmptyArchive: true }
-                failure {
-                    echo "Trivy image scan FAILED — nothing will be pushed or deployed."
-                }
+                failure { echo "Trivy image scan FAILED — nothing will be pushed or deployed." }
             }
         }
 
         // ----------------------------------------------------------------
-        // GATE 4 — Container must start and respond on all health endpoints.
+        // GATE 4 — Container health check
         // ----------------------------------------------------------------
         stage('Docker Container Test') {
             steps {
@@ -302,14 +299,12 @@ pipeline {
                     sh 'docker logs ${APP_NAME} 2>/dev/null || true'
                     sh 'docker rm -f ${APP_NAME} 2>/dev/null || true'
                 }
-                failure {
-                    echo "Container test FAILED — nothing will be pushed or deployed."
-                }
+                failure { echo "Container test FAILED — nothing will be pushed or deployed." }
             }
         }
 
         // ----------------------------------------------------------------
-        // GATE 5 — Falco must detect zero runtime alerts.
+        // GATE 5 — Falco runtime security (zero alerts)
         // ----------------------------------------------------------------
         stage('Falco Runtime Security Scan') {
             steps {
@@ -403,12 +398,13 @@ EOF
                     sh 'docker rm -f falco-scanner 2>/dev/null || true'
                     sh 'docker ps -q -f name=${APP_NAME} | grep -q . && docker rm -f ${APP_NAME} || true'
                 }
-                failure {
-                    echo "Falco scan FAILED — nothing will be pushed or deployed."
-                }
+                failure { echo "Falco scan FAILED — nothing will be pushed or deployed." }
             }
         }
 
+        // ----------------------------------------------------------------
+        // GATE 6 — DAST (OWASP ZAP)
+        // ----------------------------------------------------------------
         stage('DAST Scan') {
             steps {
                 script {
@@ -436,7 +432,6 @@ EOF
                         def lowCount    = sh(script: 'grep -o \'"risk":"Low"\' zap_report.json | wc -l || echo 0', returnStdout: true).trim()
                         echo "High: ${highCount} | Medium: ${mediumCount} | Low: ${lowCount}"
 
-                        // Hard gate: fail if any High-risk ZAP findings
                         if (highCount.toInteger() > 0) {
                             error "OWASP ZAP found ${highCount} High-risk issue(s) — aborting pipeline."
                         }
@@ -456,45 +451,40 @@ EOF
                     ])
                     archiveArtifacts artifacts: 'zap_report.html, zap_report.json', allowEmptyArchive: true
                 }
-                failure {
-                    echo "DAST scan FAILED — nothing will be pushed or deployed."
-                }
+                failure { echo "DAST scan FAILED — nothing will be pushed or deployed." }
             }
         }
 
         // ----------------------------------------------------------------
-        // NEW: Push with SBOM + Provenance attestations (max mode)
-        // Only if all previous gates passed.
+        // Push with SBOM + Provenance attestations (max mode)
+        // Uses docker/buildx-bin container to avoid host buildx dependency
         // ----------------------------------------------------------------
         stage('Push with Attestations (SBOM + Provenance)') {
             when { expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
             steps {
                 sh '''
-                    # Install docker-buildx if missing
-                    mkdir -p ~/.docker/cli-plugins
-                    if [ ! -f ~/.docker/cli-plugins/docker-buildx ]; then
-                        curl -sSL https://github.com/docker/buildx/releases/latest/download/buildx-linux-amd64 -o ~/.docker/cli-plugins/docker-buildx
-                        chmod +x ~/.docker/cli-plugins/docker-buildx
-                    fi
-                    docker buildx version
-
                     # Login to Docker Hub
                     echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
 
-                    # Create and bootstrap a new builder (ensures attestations work)
-                    docker buildx create --use --name attest-builder || docker buildx use attest-builder
-                    docker buildx inspect --bootstrap
-
-                    # Build and push with SBOM and provenance attestations (max mode)
-                    docker buildx build \
-                        --attest type=sbom,generator=general \
-                        --attest type=provenance,mode=max \
-                        --push \
-                        -f docker/Dockerfile \
-                        -t ${DOCKER_IMAGE}:${APP_VERSION} \
-                        -t ${DOCKER_IMAGE}:latest \
-                        -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \
-                        .
+                    # Use official buildx container to push with attestations
+                    docker run --rm --privileged \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        -v ${WORKSPACE}:/workspace \
+                        -w /workspace \
+                        docker/buildx-bin:latest \
+                        sh -c "
+                            docker buildx create --use --name attest-builder || docker buildx use attest-builder
+                            docker buildx inspect --bootstrap
+                            docker buildx build \
+                                --attest type=sbom,generator=general \
+                                --attest type=provenance,mode=max \
+                                --push \
+                                -f docker/Dockerfile \
+                                -t ${DOCKER_IMAGE}:${APP_VERSION} \
+                                -t ${DOCKER_IMAGE}:latest \
+                                -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \
+                                .
+                        "
 
                     docker logout
                 '''
@@ -548,9 +538,7 @@ EOF
                 '''
             }
             post {
-                always {
-                    archiveArtifacts artifacts: 'kyverno-reports/**', allowEmptyArchive: true
-                }
+                always { archiveArtifacts artifacts: 'kyverno-reports/**', allowEmptyArchive: true }
             }
         }
 
