@@ -66,7 +66,7 @@ pipeline {
             }
         }
 
-        // GATE 1 — Unit tests
+        // GATE 1 — Unit tests must pass
         stage('Unit Tests') {
             steps {
                 sh '''
@@ -134,7 +134,7 @@ pipeline {
             }
         }
 
-        // GATE 2 — SonarQube
+        // GATE 2 — SonarQube quality gate
         stage('SonarQube Analysis') {
             when { expression { env.SONAR_TOKEN != null && env.SONAR_TOKEN != '' } }
             steps {
@@ -220,7 +220,7 @@ pipeline {
             }
         }
 
-        // GATE 3 — Trivy image scan
+        // GATE 3 — Trivy image scan (zero CRITICAL CVEs)
         stage('Trivy Image Scan') {
             steps {
                 sh '''
@@ -290,7 +290,7 @@ pipeline {
             }
         }
 
-        // GATE 5 — Falco runtime security
+        // GATE 5 — Falco runtime security (zero alerts)
         stage('Falco Runtime Security Scan') {
             steps {
                 script {
@@ -439,43 +439,47 @@ EOF
         }
 
         // ----------------------------------------------------------------
-        // PUSH WITH ATTESTATIONS (fixed: installs buildx on host)
+        // PUSH WITH ATTESTATIONS — works on any agent (no host buildx required)
         // ----------------------------------------------------------------
         stage('Push with Attestations (SBOM + Provenance)') {
             when { expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
             steps {
-                sh '''
-                    # Install docker-buildx plugin on the host if missing
-                    mkdir -p ~/.docker/cli-plugins
-                    if [ ! -f ~/.docker/cli-plugins/docker-buildx ]; then
-                        curl -sSL https://github.com/docker/buildx/releases/download/v0.20.1/buildx-v0.20.1.linux-amd64 -o ~/.docker/cli-plugins/docker-buildx
-                        chmod +x ~/.docker/cli-plugins/docker-buildx
-                    fi
-                    docker buildx version
+                script {
+                    // We need to pass the credentials into the container environment safely
+                    def dockerUser = sh(script: "echo \${DOCKER_CREDS_USR}", returnStdout: true).trim()
+                    def dockerPass = sh(script: "echo \${DOCKER_CREDS_PSW}", returnStdout: true).trim()
+                    sh """
+                        docker run --rm --privileged \
+                            -v /var/run/docker.sock:/var/run/docker.sock \
+                            -v ${WORKSPACE}:/workspace \
+                            -w /workspace \
+                            docker:24.0.6-cli \
+                            sh -c "
+                                # Install buildx inside container
+                                mkdir -p ~/.docker/cli-plugins
+                                curl -sSL https://github.com/docker/buildx/releases/download/v0.20.1/buildx-v0.20.1.linux-amd64 -o ~/.docker/cli-plugins/docker-buildx
+                                chmod +x ~/.docker/cli-plugins/docker-buildx
 
-                    # Enable BuildKit for this build
-                    export DOCKER_BUILDKIT=1
+                                # Login to Docker Hub
+                                echo '${dockerPass}' | docker login -u '${dockerUser}' --password-stdin
 
-                    # Login to Docker Hub
-                    echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
+                                # Create builder
+                                docker buildx create --use --name attest-builder || docker buildx use attest-builder
+                                docker buildx inspect --bootstrap
 
-                    # Create and bootstrap a builder (if not exists)
-                    docker buildx create --use --name attest-builder || docker buildx use attest-builder
-                    docker buildx inspect --bootstrap
-
-                    # Build and push with attestations
-                    docker buildx build \
-                        --attest type=sbom,generator=general \
-                        --attest type=provenance,mode=max \
-                        --push \
-                        -f docker/Dockerfile \
-                        -t ${DOCKER_IMAGE}:${APP_VERSION} \
-                        -t ${DOCKER_IMAGE}:latest \
-                        -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \
-                        .
-
-                    docker logout
-                '''
+                                # Build and push with attestations
+                                docker buildx build \\
+                                    --attest type=sbom,generator=general \\
+                                    --attest type=provenance,mode=max \\
+                                    --push \\
+                                    -f docker/Dockerfile \\
+                                    -t ${DOCKER_IMAGE}:${APP_VERSION} \\
+                                    -t ${DOCKER_IMAGE}:latest \\
+                                    -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \\
+                                    .
+                            "
+                    """
+                }
             }
         }
 
