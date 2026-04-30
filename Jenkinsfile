@@ -14,6 +14,9 @@ pipeline {
         DOCKER_CREDS     = credentials('Docker-Hub')
 
         PATH             = "/opt/sonar-scanner/bin:${env.PATH}"
+        
+        // Enable BuildKit for attestations
+        DOCKER_BUILDKIT  = "1"
     }
 
     options {
@@ -460,15 +463,39 @@ EOF
         }
 
         // ----------------------------------------------------------------
-        // Only reached if ALL gates above passed.
+        // NEW: Push with SBOM + Provenance attestations (max mode)
+        // Only if all previous gates passed.
         // ----------------------------------------------------------------
-        stage('Push to Docker Hub') {
+        stage('Push with Attestations (SBOM + Provenance)') {
+            when { expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
             steps {
                 sh '''
+                    # Install docker-buildx if missing
+                    mkdir -p ~/.docker/cli-plugins
+                    if [ ! -f ~/.docker/cli-plugins/docker-buildx ]; then
+                        curl -sSL https://github.com/docker/buildx/releases/latest/download/buildx-linux-amd64 -o ~/.docker/cli-plugins/docker-buildx
+                        chmod +x ~/.docker/cli-plugins/docker-buildx
+                    fi
+                    docker buildx version
+
+                    # Login to Docker Hub
                     echo "${DOCKER_CREDS_PSW}" | docker login -u "${DOCKER_CREDS_USR}" --password-stdin
-                    docker push ${DOCKER_IMAGE}:${APP_VERSION}
-                    docker push ${DOCKER_IMAGE}:latest
-                    docker push ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
+
+                    # Create and bootstrap a new builder (ensures attestations work)
+                    docker buildx create --use --name attest-builder || docker buildx use attest-builder
+                    docker buildx inspect --bootstrap
+
+                    # Build and push with SBOM and provenance attestations (max mode)
+                    docker buildx build \
+                        --attest type=sbom,generator=general \
+                        --attest type=provenance,mode=max \
+                        --push \
+                        -f docker/Dockerfile \
+                        -t ${DOCKER_IMAGE}:${APP_VERSION} \
+                        -t ${DOCKER_IMAGE}:latest \
+                        -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \
+                        .
+
                     docker logout
                 '''
             }
@@ -569,6 +596,7 @@ EOF
                             <li>✅ Falco Runtime Scan (zero alerts)</li>
                             <li>✅ OWASP ZAP DAST (zero High-risk findings)</li>
                             <li>✅ Kyverno Policy Enforcement</li>
+                            <li>✅ SBOM + Provenance attestations attached</li>
                         </ul>
                         <p>Attached: all security reports.</p>
                         </body></html>
